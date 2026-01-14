@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Worker Control Room</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div id="app" style="display: none;">
+        <div class="container">
+            <header>
+                <h1><i class="fa-solid fa-bolt"></i> CITY GRID CONTROL</h1>
+                <div class="status-bar">
+                    <span id="connection-status">CONNECTED TO MAINFRAME</span>
+                    <button id="close-btn"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </header>
+            
+            <main>
+                <div class="grid-overview">
+                    <div class="sector-card" id="sector-legion">
+                        <div class="card-header">
+                            <h3>Legion Square</h3>
+                            <span class="status-indicator">ONLINE</span>
+                        </div>
+                        <div class="health-bar-container">
+                            <div class="health-bar" style="width: 100%;"></div>
+                        </div>
+                        <div class="details">
+                            <p>Health: <span class="health-val">100</span>%</p>
+                            <button class="dispatch-btn" onclick="dispatchCrew('legion')">DISPATCH CREW</button>
+                        </div>
+                    </div>
+
+                    <div class="sector-card" id="sector-mirror_park">
+                        <div class="card-header">
+                            <h3>Mirror Park</h3>
+                            <span class="status-indicator">ONLINE</span>
+                        </div>
+                        <div class="health-bar-container">
+                            <div class="health-bar" style="width: 100%;"></div>
+                        </div>
+                        <div class="details">
+                            <p>Health: <span class="health-val">100</span>%</p>
+                            <button class="dispatch-btn" onclick="dispatchCrew('mirror_park')">DISPATCH CREW</button>
+                        </div>
+                    </div>
+
+                    <div class="sector-card" id="sector-sandy_shores">
+                        <div class="card-header">
+                            <h3>Sandy Shores</h3>
+                            <span class="status-indicator">ONLINE</span>
+                        </div>
+                        <div class="health-bar-container">
+                            <div class="health-bar" style="width: 100%;"></div>
+                        </div>
+                        <div class="details">
+                            <p>Health: <span class="health-val">100</span>%</p>
+                            <button class="dispatch-btn" onclick="dispatchCrew('sandy_shores')">DISPATCH CREW</button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
