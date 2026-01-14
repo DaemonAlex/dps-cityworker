@@ -4,17 +4,44 @@ local Players = {}
 local SectorHealth = {} -- Runtime cache for Grid Health
 
 --------------------------------------------------------------------------------
--- DATABASE / XP SYSTEM (Mocking SQL for safety, uncomment to use oxmysql)
+-- DATABASE / XP SYSTEM 
 --------------------------------------------------------------------------------
+
+-- Helper to get the correct ID based on Framework
+local function GetCid(source)
+    local player = GetPlayer(source)
+    if not player then return nil end
+    
+    if Config.Framework == 'qb' then
+        return player.PlayerData.citizenid
+    else
+        return player.identifier -- ESX Identifier
+    end
+end
+
 local function GetPlayerStats(source)
-    -- In a real scenario, fetch from DB:
-    -- local result = MySQL.single.await('SELECT rank, xp FROM city_worker_users WHERE citizenid = ?', {cid})
-    -- For now, we return default level 1 stats so the script works immediately
+    local cid = GetCid(source)
+    if not cid then return { rank = 1, xp = 0 } end
+
+    -- Fetch from Database
+    local result = MySQL.single.await('SELECT rank, xp FROM city_worker_users WHERE citizenid = ?', {cid})
+    
+    if result then
+        return result
+    end
+
+    -- If no result, return default stats
     return { rank = 1, xp = 0 }
 end
 
 local function SavePlayerStats(source, rank, xp)
-    -- MySQL.update.await('UPDATE city_worker_users SET rank = ?, xp = ? WHERE citizenid = ?', {rank, xp, cid})
+    local cid = GetCid(source)
+    if not cid then return end
+
+    -- Save to Database (Insert if new, Update if exists)
+    MySQL.insert.await('INSERT INTO city_worker_users (citizenid, rank, xp) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE rank = VALUES(rank), xp = VALUES(xp)', {cid, rank, xp})
+    
+    -- Debug Print (Optional)
     -- print(('Saved stats for %s: Rank %d, XP %d'):format(GetPlayerName(source), rank, xp))
 end
 
@@ -119,7 +146,7 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     local rankData = Config.Ranks[Players[src].rank] or Config.Ranks[1]
     local payment = math.floor(Config.Economy.BasePay * rankData.payMultiplier)
 
-    -- 2. Add Money (Bridge Function)
+    -- 2. Add Money (Uses our new Bridge function)
     local success = AddMoney(src, Config.Economy.Account or 'cash', payment)
     
     if success then
@@ -135,40 +162,4 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     -- Check for Rank Up (Simple logic: Rank * 1000 XP needed)
     if Players[src].xp >= (Players[src].rank * 1000) then
         if Config.Ranks[Players[src].rank + 1] then
-            Players[src].rank = Players[src].rank + 1
-            Players[src].xp = 0
-            TriggerClientEvent('ox_lib:notify', src, {type='success', description='PROMOTION: You are now a '..Config.Ranks[Players[src].rank].label})
-        end
-    end
-
-    -- Save Data
-    SavePlayerStats(src, Players[src].rank, Players[src].xp)
-
-    -- 4. Repair the City Grid
-    local sectorId, newHealth = RepairSector(pos, 5.0) -- Repair 5% health
-    if sectorId then
-        TriggerClientEvent('ox_lib:notify', src, {type='info', description=('Sector %s Health: %.1f%%'):format(sectorId, newHealth)})
-    end
-
-    -- 5. Assign Next Task
-    CreateThread(function()
-        Wait(Server.Timeout)
-        
-        -- Generate next random location from sv_config list
-        local newDelivery = Server.Locations[math.random(#Server.Locations)]
-        Players[src].location = newDelivery
-        
-        TriggerClientEvent("dps-cityworker:client:generatedLocation", src, Players[src])
-    end)
-
-    return true
-end)
-
--- Cleanup on drop
-AddEventHandler("playerDropped", function()
-    local src = source
-    if Players[src] then
-        if DoesEntityExist(Players[src].entity) then DeleteEntity(Players[src].entity) end
-        Players[src] = nil
-    end
-end)
+            Players[src].rank = Players
