@@ -1,25 +1,26 @@
-if GetResourceState('es_extended') ~= 'started' then return end
+local ESX = exports["es_extended"]:getSharedObject()
 
-local ESX = exports['es_extended']:getSharedObject()
-
-function GetPlayer(id)
-    return ESX.GetPlayerFromId(id)
+function GetPlayer(source)
+    return ESX.GetPlayerFromId(source)
 end
 
-function DoNotification(src, text, nType)
-    TriggerClientEvent('esx:showNotification', src, text, nType)
+function AddMoney(source, account, amount)
+    local xPlayer = GetPlayer(source)
+    if xPlayer then
+        if account == 'money' or account == 'cash' then
+            xPlayer.addMoney(amount)
+        else
+            xPlayer.addAccountMoney(account, amount)
+        end
+        return true
+    end
+    return false
 end
 
-function AddMoney(xPlayer, moneyType, amount)
-    local account = moneyType == 'cash' and 'money' or moneyType
-    xPlayer.addAccountMoney(account, amount, "city-worker")
+function GetCharacterName(source)
+    local xPlayer = GetPlayer(source)
+    if xPlayer then
+        return xPlayer.getName()
+    end
+    return GetPlayerName(source)
 end
-
-function handleExploit(id, reason)
-    DropPlayer(id, 'You were dropped from the server.')
-    print(('[^3WARNING^7] Player: ^5%s^7 Attempted to exploit randol_cityworker!'):format(id))
-end
-
-AddEventHandler('esx:playerLogout', function(playerId)
-    ServerOnLogout(playerId)
-end)
