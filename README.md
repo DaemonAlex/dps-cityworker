@@ -78,10 +78,10 @@ exports['dps-cityworker']:IsPlayerOnDuty()
 exports['dps-cityworker']:GetNearestWorkZone()
 ```
 ## Command,Permission,Description
-/workstatusEveryoneCheck your current rank and job stats
-/controlroomForeman+Open the HQ grid management dashboard
-/setsectorhealth [id] [amount]AdminForce set a sector's health percentage
-/reportdamageEveryoneReport infrastructure damage to dispatch
+- /workstatusEveryoneCheck your current rank and job stats
+- /controlroomForeman+Open the HQ grid management dashboard
+- /setsectorhealth [id] [amount]AdminForce set a sector's health percentage
+- /reportdamageEveryoneReport infrastructure damage to dispatch
 
 ## Credits
 DPS Development Team (Maintainer & Expansion)
