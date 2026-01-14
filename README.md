@@ -1,33 +1,72 @@
-## Randolio: City Worker
 
-**ESX/QB supported with bridge.**
+# dps-cityworker - City Worker Career Simulation
 
-Requirements: https://github.com/overextended/ox_lib/releases
+A comprehensive career simulation resource for FiveM that transforms simple utility tasks into a fully managed city infrastructure system. Features strategic grid management, persistent world damage, and a player-run contractor economy.
 
-**Changes** - Last updated: 10/03/2024
+## Features
 
-* Added support for both ESX and QB frameworks.
-* Utilized ox lib throughout.
-* Configs are now split into client and server configs. (config.lua and sv_config.lua)
-* The whole script was rewritten to secure any exploits.
+- **Strategic Grid Management**: City is divided into managed sectors (Legion, Mirror Park, Sandy Shores) with dynamic health tracking.
+- **Persistent Decay**: Infrastructure damage (potholes, broken lights) is saved to the database and worsens over time if neglected.
+- **Contractor Economy**: Players can register utility companies and bid on government maintenance contracts.
+- **Union Progression**: A 5-tier seniority system unlocking specialized equipment and pay grades.
+- **Control Room UI**: Advanced dashboard for monitoring grid health and dispatching crews.
+- **Traffic Control**: Functional props (cones, barriers) that actively reroute NPC traffic around work zones.
 
-**You have permission to use this in your server and edit for your personal needs but are not allowed to redistribute.**
+## Dependencies
 
-## 🚀 Future Feature Improvements (Roadmap)
+- [ox_lib](https://github.com/overextended/ox_lib)
+- [ox_target](https://github.com/overextended/ox_target)
+- [oxmysql](https://github.com/overextended/oxmysql)
+- [qb-core](https://github.com/qbcore-framework/qb-core) or ESX Legacy
 
-We are planning to expand `randol_cityworker` from a simple task script into a comprehensive career simulation. Below are the planned features:
+## Installation
 
-### 🧠 Strategic Grid Management
-- **Control Room UI:** A new management interface at City Works HQ dividing the city into sectors (Legion, Mirror Park, Sandy Shores, Roxwood, Paleto).
-- **Sector Health:** Each sector has a "Health" percentage that drops over time or due to neglect.
-- **Consequences:** Reaching 0% health triggers massive **Blackouts** (lights off, store alarms triggering) in that specific zone, forcing players to prioritize emergency repairs strategically.
+1. Copy `dps-cityworker` to your resources folder.
+2. Import `sql/cityworker.sql` into your database.
+3. Add `ensure dps-cityworker` to your `server.cfg`.
+4. Configure `config.lua` to set your framework and pricing.
 
-### ⏳ Persistent Infrastructure Decay
-- **Database Persistence:** Damage to the city (potholes, broken streetlights) is saved to the database and persists through server restarts.
-- **Worsening Conditions:** Unfixed issues degrade further over time. Ignored potholes get deeper, eventually causing tire damage to player vehicles.
-- **Government Incentive:** Creates a gameplay loop where the City Government must properly fund the City Works department to prevent the city from falling into disrepair.
+## Progression System (Roadmap)
 
-### 🏗️ Contractor Economy
-- **Player-Owned Companies:** Allows players to register their own "Utility Sub-Contractor" companies instead of just working for an NPC boss.
-- **Bidding System:** The Mayor or City Government sets a maintenance budget, and player companies must bid on city maintenance contracts.
-- **Competition:** Creates a competitive labor market where companies like "Deamon Electric" or "Randol Roads" compete for the most lucrative city contracts.
+| Level | Rank | Unlocks |
+| :--- | :--- | :--- |
+| 1 | Probationary Laborer | Basic Pothole Repair, Cone Placement |
+| 2 | Junior Technician | Streetlight Repair, Utility Truck (Tier 1) |
+| 3 | Senior Technician | Electrical Box Repair, Transformer Minigames |
+| 4 | Specialist | Hazmat Cleanup, High-Voltage Equipment |
+| 5 | Foreman | Control Room Access, Contract Bidding, Crew Management |
+
+## Configuration
+
+### Main Settings (`config.lua`)
+```lua
+Config = {}
+Config.Debug = false
+Config.Framework = 'qb' -- 'qb' or 'esx'
+Config.Target = 'ox_target'
+
+-- Economic Settings
+Config.Economy = {
+    WeeklyBudget = 50000, -- Gov budget for maintenance
+    CompanyRegistrationFee = 5000,
+    BasePayPerTask = 250
+}
+
+Config.Sectors = {
+    ['legion_square'] = {
+        label = "Legion Square",
+        decayRate = 0.5, -- % health lost per hour
+        blackoutThreshold = 0 -- % health where lights go out
+    },
+    ['sandy_shores'] = {
+        label = "Sandy Shores",
+        decayRate = 0.8,
+        blackoutThreshold = 10
+    }
+}
+
+Command,Permission,Description
+/workstatus,Everyone,Check your current rank and job stats
+/controlroom,Foreman+,Open the HQ grid management dashboard
+/setsectorhealth [id] [amount],Admin,Force set a sector's health percentage
+/reportdamage,Everyone,Report infrastructure damage to dispatch
