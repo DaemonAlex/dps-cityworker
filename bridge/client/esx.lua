@@ -1,25 +1,29 @@
-if GetResourceState('es_extended') ~= 'started' then return end
+local ESX = exports["es_extended"]:getSharedObject()
 
-local ESX = exports['es_extended']:getSharedObject()
+function hasPlyLoaded()
+    return ESX.IsPlayerLoaded()
+end
+
+function handleVehicleKeys(vehicle)
+    -- Basic logic for ESX vehicle keys. 
+    -- If you use a specific key script (like qs-keys or cd_garage), update this export.
+    local plate = GetVehicleNumberPlateText(vehicle)
+    SetVehicleDoorsLocked(vehicle, 1)
+    SetVehicleDoorsLockedForAllPlayers(vehicle, false)
+end
+
+function DoNotification(text, type)
+    if Config.Notify == 'ox_lib' then
+        lib.notify({ title = 'City Worker', description = text, type = type })
+    else
+        ESX.ShowNotification(text)
+    end
+end
 
 RegisterNetEvent('esx:playerLoaded', function(xPlayer)
-    ESX.PlayerLoaded = true
     OnPlayerLoaded()
 end)
 
 RegisterNetEvent('esx:onPlayerLogout', function()
-    ESX.PlayerLoaded = false
     OnPlayerUnload()
 end)
-
-function handleVehicleKeys(veh)
-    -- not sure if ESX use a keys system??
-end
-
-function hasPlyLoaded()
-    return ESX.PlayerLoaded
-end
-
-function DoNotification(text, nType)
-    ESX.ShowNotification(text, nType)
-end
