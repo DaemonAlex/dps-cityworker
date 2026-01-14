@@ -1,7 +1,17 @@
 return {
-    Timeout = 5000, -- Timeout before generating next task. Keep it at this or higher.
+    -- Time (in ms) to wait before assigning the next task
+    Timeout = 5000, 
+    
+    -- Inventory item name for payment (e.g., 'cash', 'money')
     Account = 'cash',
-    Payout = {min = 150, max = 275},
+
+    -- The work truck model to spawn
+    Vehicle = `bison`,
+
+    -- Precise coordinates where the truck spawns (x, y, z, heading)
+    VehicleSpawn = vec4(892.6, -2339.76, 30.39, 262.64),
+
+    -- Task Locations (The pipe repair spots)
     Locations = {
         vec3(1262.34, -1755.69, 49.35),
         vec3(1293.31, -1746.18, 53.88),
@@ -24,6 +34,4 @@ return {
         vec3(1092.65, -795.06, 58.27),
         vec3(756.45, -1099.05, 22.32),
     },
-    Vehicle = `bison`,
-    VehicleSpawn = vec4(892.6, -2339.76, 30.39, 262.64),
 }
