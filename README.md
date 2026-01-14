@@ -17,30 +17,17 @@ Requirements: https://github.com/overextended/ox_lib/releases
 
 We are planning to expand `randol_cityworker` from a simple task script into a comprehensive career simulation. Below are the planned features:
 
-### 💥 Dynamic Failure System (The "Oh No!" Factor)
-- **Skill Checks:** replacing simple progress bars with `lib.skillCheck`.
-    - **Critical Failure:** Failing a check can result in pipes bursting (water particle effects) or fuse boxes sparking (player damage/electrocution).
-    - **Risk vs. Reward:** Harder tasks offer higher payouts but carry significant injury risks, requiring bandages or EMS assistance.
-- **Emergency Callouts:** Rare "Code Red" events (e.g., massive water main break) that trigger for all workers, offering triple pay for immediate response.
+### 🧠 Strategic Grid Management
+- **Control Room UI:** A new management interface at City Works HQ dividing the city into sectors (Legion, Mirror Park, Sandy Shores).
+- **Sector Health:** Each sector has a "Health" percentage that drops over time or due to neglect.
+- **Consequences:** Reaching 0% health triggers massive **Blackouts** (lights off, store alarms triggering) in that specific zone, forcing players to prioritize emergency repairs strategically.
 
-### 🛠️ Immersive Props & Scene Setup
-- **Tool Requirement:** Players must purchase and carry a **Toolbox** item from a hardware store to start shifts.
-- **Physicality:** Forced animations for carrying heavy tools/ladders from the truck to the work site.
-- **Work Zone Safety:** Requirement to place **Traffic Cones** or **Road Barriers** (via context menu) around the site before work can commence. Failure to do so increases the risk of NPC traffic accidents.
+### ⏳ Persistent Infrastructure Decay
+- **Database Persistence:** Damage to the city (potholes, broken streetlights) is saved to the database and persists through server restarts.
+- **Worsening Conditions:** Unfixed issues degrade further over time. Ignored potholes get deeper, eventually causing tire damage to player vehicles.
+- **Government Incentive:** Creates a gameplay loop where the City Government must properly fund the City Works department to prevent the city from falling into disrepair.
 
-### 📈 Career Progression & Specialization
-- **Tiered Contracts:** Replace the single job with a progression system:
-    - **Tier 1:** Sanitation & Debris Cleanup (Low risk).
-    - **Tier 2:** Road Crew (Pothole repair, tarmac laying).
-    - **Tier 3:** Electrician (High voltage, rubber gloves required).
-    - **Tier 4:** Infrastructure Specialist (Emergency response).
-- **Unlockables:** Higher tiers unlock better company vehicles and specialized tools.
-
-### 🤝 Co-op "Buddy System"
-- **Multi-Role Jobs:** High-tier jobs designed for two players.
-    - *Example:* One player operates the bucket truck arm (driver) while the second player performs repairs in the bucket (spotter).
-- **Group Pay:** Form a work crew to receive "Efficiency Bonuses" and shared mission payouts.
-
-### 🌍 "Living City" Impact
-- **Real-Time Consequences:** Fixing an electrical box triggers `SetArtificialLightsState` to actually turn streetlights back on in the area.
-- **Visual Feedback:** Successful repairs result in visible changes (lights turning on, smoke stopping), providing "Hero Moments" for workers.
+### 🏗️ Contractor Economy
+- **Player-Owned Companies:** Allows players to register their own "Utility Sub-Contractor" companies instead of just working for an NPC boss.
+- **Bidding System:** The Mayor or City Government sets a maintenance budget, and player companies must bid on city maintenance contracts.
+- **Competition:** Creates a competitive labor market where companies like "Deamon Electric" or "Randol Roads" compete for the most lucrative city contracts.
