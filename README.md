@@ -80,8 +80,8 @@ exports['dps-cityworker']:GetNearestWorkZone()
 ## Command,Permission,Description
 - /workstatus - Check your current rank and job stats
 - /controlroom - Foreman+Open the HQ grid management dashboard (forman only)
-- /setsectorhealth - [id] [amount]AdminForce set a sector's health percentage
-- /reportdamageEveryoneReport - infrastructure damage to dispatch
+- /setsectorhealth - [id] [amount]AdminForce set a sector's health percentage (admin)
+- /reportdamage Report - infrastructure damage to dispatch
 
 ## Credits
 DPS Development Team (Maintainer & Expansion)
