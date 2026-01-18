@@ -2,6 +2,32 @@ local Config = lib.require('config')
 local Server = lib.require('sv_config')
 local Players = {}
 local SectorHealth = {}
+local playerCooldowns = {} -- Anti-exploit cooldown tracking
+
+-- =====================================
+-- ITEM DROP SYSTEM
+-- =====================================
+
+-- Weighted random selection for scavenged items
+local function GetRandomReward()
+    if not Config.ItemDrops or not Config.ItemDrops.items then return nil end
+
+    local totalChance = 0
+    for _, item in ipairs(Config.ItemDrops.items) do
+        totalChance = totalChance + item.chance
+    end
+
+    local randomNum = math.random(1, totalChance)
+    local current = 0
+
+    for _, item in ipairs(Config.ItemDrops.items) do
+        current = current + item.chance
+        if randomNum <= current then
+            return item
+        end
+    end
+    return nil
+end
 
 -- =====================================
 -- DATABASE / PERSISTENCE
@@ -455,9 +481,22 @@ lib.callback.register('dps-cityworker:server:clockOut', function(source)
         local ent = Players[source].entity
         if DoesEntityExist(ent) then DeleteEntity(ent) end
         Players[source] = nil
+        playerCooldowns[source] = nil -- Clean up cooldown tracking
         return true
     end
     return false
+end)
+
+-- Cleanup when player drops
+AddEventHandler('playerDropped', function()
+    local source = source
+    if Players[source] then
+        SavePlayerStats(source, Players[source])
+        local ent = Players[source].entity
+        if DoesEntityExist(ent) then DeleteEntity(ent) end
+        Players[source] = nil
+    end
+    playerCooldowns[source] = nil
 end)
 
 lib.callback.register('dps-cityworker:server:Payment', function(source)
@@ -465,6 +504,16 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     local pos = GetEntityCoords(ped)
 
     if not Players[source] then return false, nil end
+
+    -- Anti-Exploit: Cooldown check (2 seconds between task completions)
+    local currentTime = os.time()
+    if playerCooldowns[source] and (currentTime - playerCooldowns[source]) < 2 then
+        if Config.Debug then
+            print('^1[DPS-CityWorker] Exploit Warning: Player '..source..' tried to spam task completions^7')
+        end
+        return false, nil
+    end
+    playerCooldowns[source] = currentTime
 
     local playerData = Players[source]
     local taskType = playerData.taskType or 'pipe'
@@ -475,8 +524,9 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     local teamworkBonus = CalculateTeamworkBonus(source)
     local payment = math.floor(Config.Economy.BasePay * rankData.payMultiplier * teamworkBonus)
 
-    -- 2. Add Money
-    local success = Bridge.AddMoney(source, Server.Account or 'cash', payment, 'city-worker-payment')
+    -- 2. Add Money (using configured currency)
+    local account = Config.Economy.Currency or Server.Account or 'cash'
+    local success = Bridge.AddMoney(source, account, payment, 'city-worker-payment')
 
     if not success then
         print(('[dps-cityworker] ^1ERROR: Failed to pay %s^0'):format(source))
@@ -502,6 +552,27 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
         Bridge.Notify(source, 'Promoted to ' .. Config.Ranks[playerData.rank].label .. '!', 'success')
     end
 
+    -- 5.5. Scavenging / Item Drops
+    local foundItem = nil
+    if Config.ItemDrops and Config.ItemDrops.enabled then
+        local dropChance = math.random(1, 100)
+        if dropChance <= Config.ItemDrops.chance then
+            local reward = GetRandomReward()
+            if reward then
+                local amount = math.random(reward.min, reward.max)
+                local itemSuccess = Bridge.AddItem(source, reward.name, amount)
+
+                if itemSuccess then
+                    foundItem = { name = reward.name, amount = amount }
+                    Bridge.Notify(source, ('Found materials: %dx %s'):format(amount, reward.name), 'inform')
+                    if Config.Debug then
+                        print(('[DPS-CityWorker] Player %s found %dx %s'):format(source, amount, reward.name))
+                    end
+                end
+            end
+        end
+    end
+
     -- 6. Get next task
     local newTaskType = GetTaskForRank(playerData.rank)
     local newLocation = GetLocationForTask(newTaskType)
@@ -519,6 +590,7 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
         rankUp = rankUp,
         sectorId = sectorId,
         sectorHealth = newHealth,
+        foundItem = foundItem, -- Scavenged item (nil if none found)
         nextTask = {
             type = newTaskType,
             label = TaskTypes[newTaskType].label,

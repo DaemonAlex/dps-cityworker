@@ -500,12 +500,8 @@ local function startWork(netid, data)
 
     isHired = true
 
-    -- Handle fuel
-    if Config.FuelScript and Config.FuelScript.enable then
-        exports[Config.FuelScript.script]:SetFuel(workVehicle, 100.0)
-    else
-        Entity(workVehicle).state.fuel = 100
-    end
+    -- Handle fuel (uses Bridge multi-fuel support)
+    Bridge.SetVehicleFuel(workVehicle, 100.0)
 
     Bridge.Notify('You started your shift!', 'success')
 

@@ -1,14 +1,15 @@
 return {
     -- Core Settings
     Debug = false, -- Set to true for print debugging and dev commands
-    Framework = 'qb', -- 'qb' or 'esx'
+    Framework = 'auto', -- 'auto', 'qbx', 'qb', or 'esx' (auto-detects QBox first)
+    Inventory = 'auto', -- 'auto', 'ox', 'qs', 'codem', or 'default' (auto-detects)
     Target = 'ox_target', -- 'ox_target' or 'qb-target'
     Notify = 'ox_lib', -- 'ox_lib' or 'qb' or 'esx'
 
-    -- Interaction Settings
+    -- Fuel Script Support (auto-detects if 'auto')
     FuelScript = {
-        enable = false,
-        script = 'LegacyFuel', -- Name of your fuel script export
+        enable = true,
+        script = 'auto', -- 'auto', 'LegacyFuel', 'ox_fuel', 'ps-fuel', 'cdn-fuel', 'qs-fuelstations'
     },
 
     -- Boss / HQ Settings
@@ -18,9 +19,24 @@ return {
     -- Economy & Contractor Settings
     Economy = {
         BasePay = 250, -- Base payment for a simple repair
+        Currency = 'cash', -- Account type for payments ('cash', 'bank', 'black_money')
         WeeklyBudget = 50000, -- Government budget allocation (Roadmap feature)
         CompanyRegistrationFee = 5000, -- Cost to register a sub-contractor company
         MaterialCost = 50, -- Cost deducted if player buys their own supplies
+    },
+
+    -- Scavenging System (find materials while working)
+    ItemDrops = {
+        enabled = true,
+        chance = 40, -- % chance per task to find an item
+        items = {
+            -- { name = 'item_spawn_name', min = qty, max = qty, chance = weight }
+            { name = 'copper',       min = 1, max = 3, chance = 50 }, -- Common
+            { name = 'plastic',      min = 1, max = 4, chance = 30 },
+            { name = 'metalscrap',   min = 2, max = 5, chance = 30 },
+            { name = 'electronics',  min = 1, max = 1, chance = 10 }, -- Rare
+            { name = 'steel',        min = 1, max = 2, chance = 5 },  -- Very Rare
+        },
     },
 
     -- Seniority / Progression System

@@ -135,6 +135,130 @@ elseif Bridge.Framework == 'esx' then
 end
 
 -- =====================================
+-- FUEL SYSTEM (Multi-Script Support)
+-- =====================================
+
+local detectedFuelScript = nil
+
+-- Auto-detect fuel script on startup
+local function DetectFuelScript()
+    if Config.FuelScript and Config.FuelScript.script ~= 'auto' then
+        return Config.FuelScript.script
+    end
+
+    -- Auto-detection order (most common first)
+    local fuelScripts = {
+        'ox_fuel',
+        'LegacyFuel',
+        'ps-fuel',
+        'cdn-fuel',
+        'qs-fuelstations',
+        'lj-fuel',
+        'ti_fuel',
+        'myFuel',
+    }
+
+    for _, script in ipairs(fuelScripts) do
+        if GetResourceState(script) == 'started' then
+            if Config.Debug then
+                print('[DPS-CityWorker] Auto-detected fuel script: ' .. script)
+            end
+            return script
+        end
+    end
+
+    return nil -- No fuel script detected
+end
+
+-- Initialize fuel detection
+CreateThread(function()
+    Wait(1000) -- Wait for resources to load
+    detectedFuelScript = DetectFuelScript()
+end)
+
+function Bridge.SetVehicleFuel(vehicle, fuelLevel)
+    if not vehicle or not DoesEntityExist(vehicle) then return false end
+
+    fuelLevel = fuelLevel or 100.0
+
+    -- Check if fuel is enabled in config
+    if Config.FuelScript and not Config.FuelScript.enable then
+        Entity(vehicle).state.fuel = fuelLevel
+        return true
+    end
+
+    local fuelScript = detectedFuelScript
+
+    if not fuelScript then
+        -- Fallback to statebag
+        Entity(vehicle).state.fuel = fuelLevel
+        return true
+    end
+
+    -- Script-specific fuel setting
+    local success = pcall(function()
+        if fuelScript == 'ox_fuel' then
+            Entity(vehicle).state.fuel = fuelLevel
+        elseif fuelScript == 'LegacyFuel' then
+            exports['LegacyFuel']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'ps-fuel' then
+            exports['ps-fuel']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'cdn-fuel' then
+            exports['cdn-fuel']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'qs-fuelstations' then
+            exports['qs-fuelstations']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'lj-fuel' then
+            exports['lj-fuel']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'ti_fuel' then
+            exports['ti_fuel']:SetFuel(vehicle, fuelLevel)
+        elseif fuelScript == 'myFuel' then
+            exports['myFuel']:SetFuel(vehicle, fuelLevel)
+        else
+            -- Try generic export pattern
+            exports[fuelScript]:SetFuel(vehicle, fuelLevel)
+        end
+    end)
+
+    if not success then
+        -- Fallback to statebag if export fails
+        Entity(vehicle).state.fuel = fuelLevel
+    end
+
+    return true
+end
+
+function Bridge.GetVehicleFuel(vehicle)
+    if not vehicle or not DoesEntityExist(vehicle) then return 0 end
+
+    local fuelScript = detectedFuelScript
+
+    if not fuelScript then
+        return Entity(vehicle).state.fuel or 100
+    end
+
+    local fuel = 100
+    pcall(function()
+        if fuelScript == 'ox_fuel' then
+            fuel = Entity(vehicle).state.fuel or 100
+        elseif fuelScript == 'LegacyFuel' then
+            fuel = exports['LegacyFuel']:GetFuel(vehicle)
+        elseif fuelScript == 'ps-fuel' then
+            fuel = exports['ps-fuel']:GetFuel(vehicle)
+        elseif fuelScript == 'cdn-fuel' then
+            fuel = exports['cdn-fuel']:GetFuel(vehicle)
+        elseif fuelScript == 'qs-fuelstations' then
+            fuel = exports['qs-fuelstations']:GetFuel(vehicle)
+        elseif fuelScript == 'lj-fuel' then
+            fuel = exports['lj-fuel']:GetFuel(vehicle)
+        else
+            fuel = exports[fuelScript]:GetFuel(vehicle)
+        end
+    end)
+
+    return fuel or 100
+end
+
+-- =====================================
 -- BACKWARDS COMPATIBILITY ALIASES
 -- =====================================
 
