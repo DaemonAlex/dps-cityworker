@@ -702,6 +702,8 @@ end)
 
 local ActiveEmergencyBlips = {}
 local EmergencyProps = {}
+local EmergencyProximityPoints = {} -- Proximity points that auto-create zones
+local EmergencyZoneCreated = {}     -- Track which sectors already have zones spawned
 
 RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
     -- Create emergency blip
@@ -723,6 +725,31 @@ RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
 
     -- Alert notification with sound
     PlaySoundFrontend(-1, "TIMER_STOP", "HUD_MINI_GAME_SOUNDSET", true)
+
+    -- Set up proximity point so the zone auto-creates when the player arrives
+    -- This ensures props/particles/target appear even if the dialog is missed
+    EmergencyZoneCreated[data.sector] = false
+
+    -- Remove any previous proximity point for this sector
+    if EmergencyProximityPoints[data.sector] then
+        EmergencyProximityPoints[data.sector]:remove()
+        EmergencyProximityPoints[data.sector] = nil
+    end
+
+    local emergencyData = data -- capture for closure
+    local point = lib.points.new({
+        coords = vec3(data.coords.x, data.coords.y, data.coords.z),
+        distance = 80,
+    })
+
+    function point:onEnter()
+        if isHired and not EmergencyZoneCreated[emergencyData.sector] then
+            EmergencyZoneCreated[emergencyData.sector] = true
+            CreateEmergencyZone(emergencyData)
+        end
+    end
+
+    EmergencyProximityPoints[data.sector] = point
 
     -- Only show detailed alert to on-duty workers
     if isHired then
@@ -747,8 +774,11 @@ RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
             SetNewWaypoint(data.coords.x, data.coords.y)
             Bridge.Notify('GPS set to emergency. Hurry!', 'warning')
 
-            -- Create target zone for emergency
-            CreateEmergencyZone(data)
+            -- Immediately create the zone if not already done by proximity
+            if not EmergencyZoneCreated[data.sector] then
+                EmergencyZoneCreated[data.sector] = true
+                CreateEmergencyZone(data)
+            end
         end
     else
         -- Non-workers just see the notification
@@ -762,21 +792,29 @@ RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
 end)
 
 function CreateEmergencyZone(data)
-    -- Spawn emergency prop
+    -- Snap coords to actual ground level as a safety net
+    local groundZ = data.coords.z
+    local found, z = GetGroundZFor_3dCoord(data.coords.x, data.coords.y, data.coords.z + 50.0, false)
+    if found then
+        groundZ = z
+    end
+    local groundCoords = vec3(data.coords.x, data.coords.y, groundZ)
+
+    -- Spawn emergency prop at ground-corrected position
     local propModel = GetTaskProp(data.type)
     lib.requestModel(propModel)
-    local prop = CreateObject(propModel, data.coords.x, data.coords.y, data.coords.z - 1.0, false, false, false)
+    local prop = CreateObject(propModel, groundCoords.x, groundCoords.y, groundCoords.z - 1.0, false, false, false)
     PlaceObjectOnGroundProperly(prop)
     FreezeEntityPosition(prop, true)
     EmergencyProps[data.sector] = prop
 
-    -- Start emergency particle effects (more intense)
-    StartTaskParticles(data.type, data.coords)
+    -- Start emergency particle effects at ground level
+    StartTaskParticles(data.type, groundCoords)
 
-    -- Create target zone
+    -- Create target zone at ground-corrected position
     local zoneName = 'emergency_' .. data.sector
     AddTargetZone(zoneName, {
-        coords = data.coords,
+        coords = groundCoords,
         radius = 3.0,
     }, {
         {
@@ -851,6 +889,13 @@ RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
         RemoveBlip(ActiveEmergencyBlips[sectorId])
         ActiveEmergencyBlips[sectorId] = nil
     end
+
+    -- Remove proximity point
+    if EmergencyProximityPoints[sectorId] then
+        EmergencyProximityPoints[sectorId]:remove()
+        EmergencyProximityPoints[sectorId] = nil
+    end
+    EmergencyZoneCreated[sectorId] = nil
 
     -- Stop particle effects
     if StopAllParticles then StopAllParticles() end

@@ -3,6 +3,8 @@ local Server = lib.require('sv_config')
 local Players = {}
 local SectorHealth = {}
 local playerCooldowns = {} -- Anti-exploit cooldown tracking
+local ActiveEmergencies = {}
+local UsedEmergencyLocations = {} -- Track locations currently in use
 
 -- =====================================
 -- ITEM DROP SYSTEM
@@ -100,23 +102,66 @@ end
 -- SECTOR / GRID MANAGEMENT
 -- =====================================
 
--- Decay Loop: Lowers infrastructure health over time
+-- Check if any city workers are currently on duty
+local function AnyWorkersOnDuty()
+    return next(Players) ~= nil
+end
+
+-- Decay Loop: Only decays when workers are on duty.
+-- When no workers are clocked in, infrastructure holds steady —
+-- the city isn't going to crumble just because nobody took the job today.
+-- Auto-recovery kicks in for blackouts so the city self-heals when neglected.
 CreateThread(function()
     while true do
         Wait(60000 * 10) -- Run every 10 minutes
 
-        for id, data in pairs(Config.Sectors) do
-            if SectorHealth[id] and SectorHealth[id] > 0 then
-                local decayAmount = (data.decayRate / 6)
-                SectorHealth[id] = math.max(0, SectorHealth[id] - decayAmount)
+        if AnyWorkersOnDuty() then
+            -- Normal decay — workers are on duty so the system is "live"
+            for id, data in pairs(Config.Sectors) do
+                if SectorHealth[id] and SectorHealth[id] > 0 then
+                    local decayAmount = (data.decayRate / 6)
+                    SectorHealth[id] = math.max(0, SectorHealth[id] - decayAmount)
 
-                -- Check for Blackout Threshold
-                if SectorHealth[id] <= data.blackoutThreshold then
-                    TriggerClientEvent('dps-cityworker:client:TriggerBlackout', -1, id)
-                    print(('[dps-cityworker] ^1GRID ALERT: Sector %s has failed!^0'):format(data.label))
+                    -- Check for Blackout Threshold
+                    if SectorHealth[id] <= data.blackoutThreshold then
+                        TriggerClientEvent('dps-cityworker:client:TriggerBlackout', -1, id)
+                        print(('[dps-cityworker] ^1GRID ALERT: Sector %s has failed!^0'):format(data.label))
+                    end
+
+                    SaveSectorHealth(id)
+                end
+            end
+        else
+            -- No workers on duty — auto-recover any sector in blackout
+            -- Simulates NPC city crews eventually getting things back online
+            for id, data in pairs(Config.Sectors) do
+                if SectorHealth[id] and SectorHealth[id] <= data.blackoutThreshold then
+                    -- Slowly recover: +2% per tick until just above blackout threshold
+                    local target = data.blackoutThreshold + 15
+                    if SectorHealth[id] < target then
+                        SectorHealth[id] = math.min(target, SectorHealth[id] + 2.0)
+                        SaveSectorHealth(id)
+
+                        if SectorHealth[id] > data.blackoutThreshold then
+                            TriggerClientEvent('dps-cityworker:client:ClearBlackout', -1, id)
+                            print(('[dps-cityworker] ^3AUTO-RECOVERY: %s power restored (NPC crews)^0'):format(data.label))
+                        end
+                    end
                 end
 
-                SaveSectorHealth(id)
+                -- Also auto-resolve stale emergencies when nobody is on duty
+                if ActiveEmergencies[id] then
+                    local age = os.time() - ActiveEmergencies[id].startTime
+                    if age > 1800 then -- 30 minutes with no response
+                        -- Free the location slot
+                        if ActiveEmergencies[id].locIndex then
+                            UsedEmergencyLocations[ActiveEmergencies[id].locIndex] = nil
+                        end
+                        ActiveEmergencies[id] = nil
+                        TriggerClientEvent('dps-cityworker:client:EmergencyResolved', -1, id)
+                        print(('[dps-cityworker] ^3AUTO-RESOLVED: %s emergency cleared (no workers)^0'):format(data.label))
+                    end
+                end
             end
         end
 
@@ -229,8 +274,34 @@ end
 -- EMERGENCY EVENT SYSTEM
 -- =====================================
 
-local ActiveEmergencies = {}
-local EmergencyLocations = {}
+local function GetEmergencyLocation(sectorId)
+    -- Pick from pre-defined emergency locations with verified Z coords
+    local emergencyLocs = Server.CategoryLocations and Server.CategoryLocations.emergency
+    if emergencyLocs and #emergencyLocs > 0 then
+        -- Shuffle and find an unused location
+        local candidates = {}
+        for i, loc in ipairs(emergencyLocs) do
+            if not UsedEmergencyLocations[i] then
+                table.insert(candidates, { index = i, coords = loc })
+            end
+        end
+        if #candidates > 0 then
+            local pick = candidates[math.random(#candidates)]
+            UsedEmergencyLocations[pick.index] = sectorId
+            return pick.coords, pick.index
+        end
+    end
+
+    -- Fallback: pick from generic locations if emergency list is exhausted
+    local fallbackLocs = Server.Locations
+    if fallbackLocs and #fallbackLocs > 0 then
+        return fallbackLocs[math.random(#fallbackLocs)], nil
+    end
+
+    -- Last resort: use sector center
+    local sector = Config.Sectors[sectorId]
+    return sector and sector.coords or vec3(0, 0, 0), nil
+end
 
 local function TriggerEmergencyEvent(eventType, sectorId)
     if ActiveEmergencies[sectorId] then return false end -- Already active emergency
@@ -241,25 +312,22 @@ local function TriggerEmergencyEvent(eventType, sectorId)
     local task = TaskTypes[eventType]
     if not task or not task.isEmergency then return false end
 
-    -- Generate random location within sector
-    local angle = math.random() * 2 * math.pi
-    local distance = math.random() * (sector.radius * 0.7)
-    local emergencyCoords = vec3(
-        sector.coords.x + math.cos(angle) * distance,
-        sector.coords.y + math.sin(angle) * distance,
-        sector.coords.z
-    )
+    -- Pick a pre-defined emergency location instead of random generation
+    local emergencyCoords, locIndex = GetEmergencyLocation(sectorId)
 
     ActiveEmergencies[sectorId] = {
         type = eventType,
         coords = emergencyCoords,
         startTime = os.time(),
         resolved = false,
+        locIndex = locIndex, -- Track which pre-defined location was used
     }
 
-    -- Reduce sector health significantly
+    -- Reduce sector health — but never push directly into blackout from a single event
+    -- Emergencies create urgency, not instant catastrophe
     local healthPenalty = task.repairAmount * 2
-    SectorHealth[sectorId] = math.max(0, SectorHealth[sectorId] - healthPenalty)
+    local floor = sector.blackoutThreshold + 5
+    SectorHealth[sectorId] = math.max(floor, SectorHealth[sectorId] - healthPenalty)
     SaveSectorHealth(sectorId)
 
     -- Alert all workers
@@ -296,6 +364,11 @@ local function ResolveEmergency(sectorId, source)
     SectorHealth[sectorId] = math.min(100, SectorHealth[sectorId] + task.repairAmount)
     SaveSectorHealth(sectorId)
 
+    -- Free the pre-defined location slot so it can be reused
+    if emergency.locIndex then
+        UsedEmergencyLocations[emergency.locIndex] = nil
+    end
+
     ActiveEmergencies[sectorId] = nil
 
     -- Notify all clients
@@ -305,11 +378,14 @@ local function ResolveEmergency(sectorId, source)
 end
 
 -- Random emergency event spawner
+-- Only fires when workers are on duty — no point breaking things nobody can fix
 CreateThread(function()
     Wait(300000) -- Wait 5 minutes before first potential emergency
 
     while true do
         Wait(600000) -- Check every 10 minutes
+
+        if not AnyWorkersOnDuty() then goto continue end
 
         -- 15% chance of emergency per check
         if math.random(100) <= 15 then
@@ -328,6 +404,8 @@ CreateThread(function()
                 TriggerEmergencyEvent(randomEmergency, randomSector)
             end
         end
+
+        ::continue::
     end
 end)
 
@@ -341,6 +419,7 @@ local WeatherEventCooldown = 300 -- 5 minutes between weather-triggered emergenc
 RegisterNetEvent('dps-cityworker:server:WeatherEvent', function(weatherType)
     local source = source
     if not Players[source] then return end
+    if not AnyWorkersOnDuty() then return end
 
     local currentTime = os.time()
     if currentTime - LastWeatherEvent < WeatherEventCooldown then return end

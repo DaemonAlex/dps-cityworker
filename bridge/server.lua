@@ -13,7 +13,7 @@ local QBCore, ESX = nil, nil
 
 if GetResourceState('qbx_core') == 'started' then
     Bridge.Framework = 'qbx'
-    QBCore = exports['qbx_core']:GetCoreObject()
+    QBCore = exports['qb-core']:GetCoreObject()
     print('^2[DPS-CityWorker] Framework Detected: QBox^7')
 elseif GetResourceState('qb-core') == 'started' then
     Bridge.Framework = 'qb'
