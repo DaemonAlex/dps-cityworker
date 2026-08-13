@@ -5,7 +5,7 @@ lua54 'yes'
 name 'dps-cityworker'
 author 'DeamonScripts & Randol'
 description 'Advanced City Infrastructure & Career Simulation'
-version '2.7.0'
+version '2.7.1'
 repository 'https://github.com/DaemonAlex/dps-cityworker'
 
 ui_page 'web/index.html'

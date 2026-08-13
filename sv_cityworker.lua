@@ -35,16 +35,25 @@ end
 -- DATABASE / PERSISTENCE
 -- =====================================
 
--- Load sector health from database on start
+-- Load sector health from database on start.
+-- Retries until the DB is actually reachable — a fixed wait races oxmysql's
+-- async connection on a cold server boot, which is what threw the intermittent
+-- "unable to execute a query" here (the table is fine; the connection wasn't up).
 CreateThread(function()
-    Wait(1000) -- Wait for MySQL to initialize
+    local results
+    for _ = 1, 20 do
+        local ok, res = pcall(MySQL.query.await, 'SELECT sector_id, health FROM city_infrastructure')
+        if ok and res then results = res; break end
+        Wait(1000)
+    end
 
-    local results = MySQL.query.await('SELECT sector_id, health FROM city_infrastructure')
     if results then
         for _, row in ipairs(results) do
             SectorHealth[row.sector_id] = row.health
         end
         print('[dps-cityworker] ^2Loaded sector health from database^0')
+    else
+        print('[dps-cityworker] ^1Database not ready after 20s — sectors will initialize to defaults^0')
     end
 
     -- Initialize any missing sectors

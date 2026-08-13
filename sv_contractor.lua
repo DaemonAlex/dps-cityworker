@@ -296,16 +296,24 @@ end)
 -- ─────────────────────────────────────────────────────────────
 
 CreateThread(function()
-    Wait(1500)
     if not C.enable then return end
 
-    local rows = MySQL.query.await('SELECT id, name, owner_identifier, balance, reputation FROM city_contractors')
-    if rows then
-        for _, r in ipairs(rows) do
-            Companies[r.id] = { id = r.id, name = r.name, owner = r.owner_identifier, balance = r.balance, reputation = r.reputation }
-            OwnerToCompany[r.owner_identifier] = r.id
-            Crew[r.id] = {}
-        end
+    -- Wait for the DB to be reachable before loading (same cold-boot race as sv_cityworker)
+    local rows
+    for _ = 1, 20 do
+        local ok, res = pcall(MySQL.query.await, 'SELECT id, name, owner_identifier, balance, reputation FROM city_contractors')
+        if ok and res then rows = res; break end
+        Wait(1000)
+    end
+    if not rows then
+        print('^1[dps-cityworker]^7 Contractor: database not ready — system offline')
+        return
+    end
+
+    for _, r in ipairs(rows) do
+        Companies[r.id] = { id = r.id, name = r.name, owner = r.owner_identifier, balance = r.balance, reputation = r.reputation }
+        OwnerToCompany[r.owner_identifier] = r.id
+        Crew[r.id] = {}
     end
 
     local active = MySQL.query.await("SELECT *, UNIX_TIMESTAMP(deadline) AS deadlineTs FROM city_contracts WHERE status = 'assigned'")
