@@ -145,4 +145,21 @@ return {
         PaymentMultiplier = 2.0, -- Payment bonus for emergency
         MaxActivePerSector = 1, -- Only one emergency per sector
     },
+
+    -- Sub-Contractor Company System
+    -- Senior workers register a company, accept city maintenance contracts,
+    -- fulfil them with their crew's completed tasks, and get paid a lump sum.
+    Contractor = {
+        enable = true,
+        minRankToRegister = 3,      -- Senior Technician+ can found a company
+        maxOpenContracts = 3,       -- how many open contracts exist at once
+        contractDeadline = 3600,    -- seconds to complete an accepted contract (1h)
+        targetTasksRange = { 5, 12 }, -- a contract needs N jobs completed in its sector
+        budgetPerTask = 400,        -- contract reward = target tasks * this
+        reputationPerContract = 10, -- rep gained per completed contract
+        reputationOnExpire = 5,     -- rep lost if a contract expires
+        employeeCut = 0.15,         -- share of the budget split among online crew on completion
+        withdrawAccount = 'bank',   -- account funds are withdrawn to
+        bossPed = true,             -- spawn a targetable office ped at BossCoords
+    },
 }

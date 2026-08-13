@@ -59,12 +59,14 @@ CREATE TABLE IF NOT EXISTS `city_contractors` (
   UNIQUE KEY `name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Contract bidding (roadmap feature)
+-- City maintenance contracts (sub-contractor system)
 CREATE TABLE IF NOT EXISTS `city_contracts` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `sector_id` varchar(50) NOT NULL,
   `description` text,
   `budget` int(11) NOT NULL,
+  `target_tasks` int(11) DEFAULT 0,
+  `progress` int(11) DEFAULT 0,
   `deadline` timestamp NULL DEFAULT NULL,
   `contractor_id` int(11) DEFAULT NULL,
   `status` enum('open','assigned','completed','expired') DEFAULT 'open',
@@ -73,6 +75,10 @@ CREATE TABLE IF NOT EXISTS `city_contracts` (
   KEY `status` (`status`),
   KEY `contractor_id` (`contractor_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Upgrade path for databases created before the contractor system shipped
+ALTER TABLE `city_contracts` ADD COLUMN IF NOT EXISTS `target_tasks` int(11) DEFAULT 0;
+ALTER TABLE `city_contracts` ADD COLUMN IF NOT EXISTS `progress` int(11) DEFAULT 0;
 
 -- Initialize default sector health
 INSERT IGNORE INTO `city_infrastructure` (`sector_id`, `health`) VALUES

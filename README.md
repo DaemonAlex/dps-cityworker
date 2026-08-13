@@ -42,6 +42,16 @@ duty — quietly heals itself through NPC crews.
   ability to dispatch crews.
 - **Crew assignment** — assign specific tasks to on-duty workers.
 
+### Sub-contractor companies
+- **Register a company** (Senior Technician+, for a fee) at the Sub-Contractor
+  Office ped, or via `/company`.
+- **City contracts** — the city posts maintenance contracts (complete N jobs in a
+  sector for a lump-sum budget). Accept one and fulfil it before the deadline.
+- **Crews** — hire nearby on-duty workers; their completed tasks count toward your
+  active contract, and they earn a cut of the payout on completion.
+- **Company funds & reputation** — completed contracts pay into company funds
+  (withdraw to your bank) and build reputation; expired contracts cost reputation.
+
 ### Other
 - **Damage reports** — players can report infrastructure damage, logged to the DB.
 - **Anti-exploit** — per-player completion cooldowns.
@@ -65,14 +75,13 @@ duty — quietly heals itself through NPC crews.
 |---|---|
 | `/workstatus` | Check your rank, XP, and repair count |
 | `/controlroom` | Open the Foreman Control Room dashboard (rank 5+) |
+| `/company` | Open your sub-contractor company (register · contracts · crew · funds) |
 | `/reportdamage [type]` | Report infrastructure damage at your location |
 | `/setsectorhealth <sector> <health>` | *(admin)* set a sector's health |
 | `/triggeremergency <type> <sector>` | *(admin)* trigger an emergency |
 
 ## Notes
 - The UI follows the Del Perro Sands house style (coastal-dusk).
-- A sub-contractor company economy (`city_contractors` / `city_contracts`) is
-  scaffolded in the schema/config but not yet implemented — planned, not active.
 
 ---
 *DPS Development — part of the Del Perro Sands server stack.*

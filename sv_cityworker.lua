@@ -615,6 +615,11 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     -- 3. Repair sector health
     local sectorId, newHealth = RepairSector(pos, task.repairAmount)
 
+    -- 3.5. Contractor system: count this task toward any active company contract in the sector
+    if sectorId then
+        TriggerEvent('dps-cityworker:contractor:taskDone', source, sectorId)
+    end
+
     -- 4. Handle XP and Progression
     local xpGain = task.xp + math.random(-5, 10)
     playerData.xp = playerData.xp + xpGain
