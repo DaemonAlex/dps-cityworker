@@ -87,7 +87,7 @@ local function GetPlayerStats(source)
     local identifier = Bridge.GetIdentifier(source)
     if not identifier then return { rank = 1, xp = 0, total_repairs = 0 } end
 
-    local result = MySQL.single.await('SELECT rank, xp, total_repairs, total_earnings FROM city_worker_users WHERE identifier = ?', {identifier})
+    local result = MySQL.single.await('SELECT `rank`, xp, total_repairs, total_earnings FROM city_worker_users WHERE identifier = ?', {identifier})
 
     if result then
         return result
@@ -101,9 +101,9 @@ local function SavePlayerStats(source, data)
     if not identifier then return end
 
     MySQL.insert.await([[
-        INSERT INTO city_worker_users (identifier, rank, xp, total_repairs, total_earnings)
+        INSERT INTO city_worker_users (identifier, `rank`, xp, total_repairs, total_earnings)
         VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE rank = VALUES(rank), xp = VALUES(xp), total_repairs = VALUES(total_repairs), total_earnings = VALUES(total_earnings)
+        ON DUPLICATE KEY UPDATE `rank` = VALUES(`rank`), xp = VALUES(xp), total_repairs = VALUES(total_repairs), total_earnings = VALUES(total_earnings)
     ]], {identifier, data.rank, data.xp, data.total_repairs or 0, data.total_earnings or 0})
 end
 
@@ -607,6 +607,15 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
     local taskType = playerData.taskType or 'pipe'
     local task = TaskTypes[taskType] or TaskTypes.pipe
 
+    -- Anti-exploit: must be at the assigned task location. playerData.location is
+    -- set only when a task is dealt; it is cleared below after payment so the
+    -- client must obtain a fresh assignment before being paid again.
+    local loc = playerData.location
+    if not loc then return false, nil end
+    if #(pos - vector3(loc.x, loc.y, loc.z)) > (Config.TaskCompleteDistance or 12.0) then
+        return false, nil
+    end
+
     -- 1. Calculate Pay based on Rank + Teamwork Bonus
     local rankData = Config.Ranks[playerData.rank] or Config.Ranks[1]
     local teamworkBonus = CalculateTeamworkBonus(source)
@@ -623,6 +632,7 @@ lib.callback.register('dps-cityworker:server:Payment', function(source)
 
     -- 3. Repair sector health
     local sectorId, newHealth = RepairSector(pos, task.repairAmount)
+    playerData.location = nil  -- consume the task; a new one must be dealt before next pay
 
     -- 3.5. Contractor system: count this task toward any active company contract in the sector
     if sectorId then
@@ -785,7 +795,18 @@ end)
 -- DAMAGE REPORTS
 -- =====================================
 
+local reportDamageCooldown = {}
 lib.callback.register('dps-cityworker:server:ReportDamage', function(source, damageType, coords)
+    if not Players[source] then return false, 'Not on duty' end
+    if type(coords) ~= 'table' or type(coords.x) ~= 'number' or coords.x ~= coords.x then
+        return false, 'Invalid coordinates'
+    end
+    local now = os.time()
+    if reportDamageCooldown[source] and (now - reportDamageCooldown[source]) < 30 then
+        return false, 'Reporting too fast'
+    end
+    reportDamageCooldown[source] = now
+
     local identifier = Bridge.GetIdentifier(source)
     local sectorId = GetSectorForCoords(coords)
 
@@ -942,7 +963,16 @@ end)
 
 lib.callback.register('dps-cityworker:server:CompleteEmergency', function(source, sectorId)
     if not Players[source] then return false end
-    if not ActiveEmergencies[sectorId] then return false end
+    local em = ActiveEmergencies[sectorId]
+    if not em then return false end
+
+    -- Anti-exploit: must physically be at the emergency, not claim it map-wide
+    if em.coords then
+        local pos = GetEntityCoords(GetPlayerPed(source))
+        if #(pos - vector3(em.coords.x, em.coords.y, em.coords.z)) > (Config.EmergencyDistance or 20.0) then
+            return false
+        end
+    end
 
     return ResolveEmergency(sectorId, source)
 end)

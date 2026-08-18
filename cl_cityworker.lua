@@ -1003,7 +1003,7 @@ end
 -- Traffic control radial menu (when doing traffic_control task)
 local TrafficControlActive = false
 
-local function OpenTrafficControlMenu()
+function OpenTrafficControlMenu()  -- forward-declared below the file header
     if TrafficControlActive then return end
     TrafficControlActive = true
 
@@ -1244,12 +1244,13 @@ RegisterNetEvent('dps-cityworker:client:TaskAssigned', function(data)
 end)
 
 -- Teamwork bonus indicator
-local TeamworkCheckThread = nil
+local teamworkRunning = false  -- CreateThread returns nothing, so track with a flag
 
 local function StartTeamworkCheck()
-    if TeamworkCheckThread then return end
+    if teamworkRunning then return end
+    teamworkRunning = true
 
-    TeamworkCheckThread = CreateThread(function()
+    CreateThread(function()
         local lastBonus = 0
 
         while isHired do
@@ -1272,7 +1273,7 @@ local function StartTeamworkCheck()
             end
         end
 
-        TeamworkCheckThread = nil
+        teamworkRunning = false
     end)
 end
 
@@ -1280,7 +1281,7 @@ end
 CreateThread(function()
     while true do
         Wait(5000)
-        if isHired and not TeamworkCheckThread then
+        if isHired and not teamworkRunning then
             StartTeamworkCheck()
         end
     end
