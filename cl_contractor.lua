@@ -88,7 +88,7 @@ openCompanyMenu = function()
 
     if info.active then
         local a = info.active
-        local mins = a.deadlineTs and math.max(0, math.floor((a.deadlineTs - os.time()) / 60)) or 0
+        local mins = a.deadlineTs and math.max(0, math.floor((a.deadlineTs - GetCloudTimeAsInt()) / 60)) or 0
         options[#options + 1] = {
             title = 'Active Contract',
             description = ('%s\n%d / %d jobs  ·  $%d  ·  %d min left'):format(a.desc, a.progress, a.target, a.budget, mins),
