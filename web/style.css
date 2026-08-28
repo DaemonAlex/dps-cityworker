@@ -1,4 +1,4 @@
-/* Del Perro Sands — house UI (coastal-dusk). Ocean-night grounds, sun-orange
+/* DelPerroSands — house UI (coastal-dusk). Ocean-night grounds, sun-orange
    accent, sea-glass for healthy state. Kept the Orbitron display face for the
    control-room feel; everything else moved onto the house palette. */
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@400;700&display=swap');
@@ -18,20 +18,20 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    background: rgba(8, 11, 20, 0.85);
+    background: rgba(10, 12, 18, 0.85);
 }
 
 .container {
     width: 80%;
     max-width: 1000px;
-    background: #151b30;
-    border: 1px solid #26304d;
+    background: #171d2e;
+    border: 1px solid #27304c;
     border-radius: 12px;
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 122, 69, 0.12);
 }
 
 header {
-    background: #0f1424;
+    background: #111522;
     padding: 20px;
     display: flex;
     justify-content: space-between;
@@ -69,10 +69,10 @@ main {
 }
 
 .sector-card {
-    background: #1b2340;
+    background: #1f263c;
     padding: 20px;
     border-radius: 10px;
-    border: 1px solid #26304d;
+    border: 1px solid #27304c;
 }
 
 .card-header {
@@ -85,7 +85,7 @@ main {
 .status-indicator {
     font-size: 12px;
     background: #4ec98a;
-    color: #0a0d18;
+    color: #0c0e16;
     padding: 2px 8px;
     border-radius: 20px;
     font-weight: bold;
@@ -95,7 +95,7 @@ main {
 .health-bar-container {
     width: 100%;
     height: 10px;
-    background: #0a0d18;
+    background: #0c0e16;
     border-radius: 20px;
     overflow: hidden;
     margin-bottom: 15px;
@@ -113,7 +113,7 @@ main {
     background: linear-gradient(180deg, #ffab6b, #ff7a45);
     border: none;
     border-radius: 8px;
-    color: #2a1206;
+    color: #101420;
     font-weight: bold;
     cursor: pointer;
     text-transform: uppercase;
@@ -132,5 +132,5 @@ main {
 }
 .critical .status-indicator {
     background: #ff6b6b;
-    color: #0a0d18;
+    color: #0c0e16;
 }

@@ -81,7 +81,7 @@ duty — quietly heals itself through NPC crews.
 | `/triggeremergency <type> <sector>` | *(admin)* trigger an emergency |
 
 ## Notes
-- The UI follows the Del Perro Sands house style (coastal-dusk).
+- The UI follows the DelPerroSands house style (coastal-dusk).
 
 ---
-*DPS Development — part of the Del Perro Sands server stack.*
+*DPS Development — part of the DelPerroSands server stack.*
