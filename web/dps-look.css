@@ -5,7 +5,7 @@ body,button,input,select,textarea{font-family:Roboto,Arial,sans-serif !important
 body{text-shadow:0 1px 2px rgba(0,0,0,.55)}
 *{backdrop-filter:none !important;-webkit-backdrop-filter:none !important;box-shadow:none !important}
 #app{background:rgba(255,122,69,.8) !important}
-.container{background:rgba(255,122,69,.8) !important;border-color:#ffffff !important;border-radius:16px}
+.container{background:rgba(20,26,40,.82) !important;border-color:#ffffff !important;border-radius:16px} /* DPS 2026-10-06: kit B navy panel (was all orange) */
 header{background:rgba(255,122,69,.8) !important;border-radius:16px}
 h1{font-family:Roboto,Arial,sans-serif !important;letter-spacing:.07em;font-weight:700}
 .sector-card{background:rgba(255,255,255,.12) !important;border-color:#ffffff !important;border-radius:16px}
