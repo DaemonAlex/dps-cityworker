@@ -31,7 +31,7 @@ client_scripts {
 }
 
 files {
-    'web/index.html',
+    'web/index.html', 'web/dps-logo.svg',
     'web/style.css', 'web/dps-look.css',
     'web/script.js',
 }
