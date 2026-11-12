@@ -2,6 +2,10 @@
 
 A city infrastructure job for Qbox servers: clock in at the depot, drive to assigned sites, repair them, and keep sector health up.
 
+## What it is for
+
+Players who do not want a police, medical or criminal role need steady work that still matters to the city. This job gives them that. Workers fix roads, lights, pipes and power, and the city shows the result: a sector that is looked after stays lit, and a sector that is neglected has power cuts. Staff get a job that runs itself, with ranks, pay and emergencies built in.
+
 ## Features
 
 ### Shift and tasks
@@ -107,6 +111,20 @@ Notes:
 | `/triggeremergency <type> <sector>` | `group.admin` | Starts an emergency (`water_main`, `gas_leak`, `downed_lines`, `fallen_tree`). |
 
 There are no key binds. All interaction is through ox_target.
+
+## On its own, and with other scripts
+
+**On its own.** With ox_lib, oxmysql, a target script and a framework (Qbox on DelPerroSands), you get the whole job: the depot boss, the work truck, tasks, skill checks, pay, XP and ranks, sector health, power cuts, emergencies, the Control Room for foremen and sub-contractor companies. Nothing in the job needs a paid script.
+
+**With ox_inventory.** Scavenged items (copper, plastic, scrap and so on) go into the player's ox_inventory. This is the inventory used on DelPerroSands.
+
+**With a paid inventory (qs-inventory or codem-inventory).** If ox_inventory is not running, the script gives and takes scavenged items through `qs-inventory`, then `codem-inventory`. It only calls their add, remove and item lookup exports. Without any of these it uses the framework's own inventory.
+
+**With a fuel script (ox_fuel, LegacyFuel, ps-fuel, cdn-fuel, qs-fuelstations, lj-fuel, ti_fuel, myFuel).** The work truck starts each shift with a full tank. The script finds the first fuel script that is running and sets the fuel level through it. Some of these are paid and some are free. With no fuel script, the truck still spawns and the job still works.
+
+**With a keys script.** The script fires the `vehiclekeys:client:SetOwner` event so the worker gets keys to the truck. Any keys script that handles that event works.
+
+**With other scripts that want city data.** Other resources can read sector health, start or resolve an emergency, and read a worker's rank through the server exports listed under Features. The script itself does not call a police computer, a phone or a dispatch script.
 
 ## Prerequisites
 
@@ -325,3 +343,43 @@ The Emergency table is not read by the code. The values are fixed in the server 
 - **Cannot register a company**: Needs rank 3 (`minRankToRegister`), the fee in bank or cash, a unique name of 3 to 40 characters, and no existing company.
 - **Crew does not progress a contract**: Hired crew only count for tasks done in the contract's sector. Crew lists are lost on resource restart, so hire them again.
 - **Admin commands do nothing**: The caller needs the `group.admin` ACE.
+
+## Recent changes
+
+- **12 November 2026.** README: what it is for, how it works alone and with paid scripts, other DPS scripts.
+- **25 October 2026.** Synced with the live server: the DelPerroSands logo was added to the panel, with small fixes to the panel styling.
+- **4 October 2026.** The Control Room and company panels got the DelPerroSands look: orange panels, white outlines and the Roboto font. The README was rewritten with features, prerequisites, install steps and settings.
+
+## Author
+
+Made by [DaemonAlex](https://github.com/DaemonAlex) for DelPerroSands.
+
+Based on the original city worker job by Randolio (Randol), who is named as co-author in `fxmanifest.lua`.
+
+## Other DPS scripts
+
+All of these are made for DelPerroSands and run together on one Qbox server. Each one works on
+its own. The ones marked "pairs with" do more when both are running.
+
+| Script | What it does |
+|---|---|
+| [dps-inventory](https://github.com/DaemonAlex/dps-inventory) | The inventory: ox_inventory with equipment slots, backpacks, armour plates and a self status panel, in the DelPerroSands colours. |
+| [dps-medical](https://github.com/DaemonAlex/dps-medical) | Patient records, illness and diagnostic tests. A companion to wasabi_ambulance. Pairs with dps-inventory: symptoms and diagnoses show on the status panel. |
+| [dps-insurance](https://github.com/DaemonAlex/dps-insurance) | Ties m-Insurance into the MDT, impound, hospital and medical chart. Pairs with dps-medical. |
+| [dps-studio](https://github.com/DaemonAlex/dps-studio) | Build rooms, doors and portals in game from one panel (`/studio`), with owners and managers so staff do not have to support them. |
+| [dps-shops](https://github.com/DaemonAlex/dps-shops) | Shop clerks who greet and react to a robbery, then player-owned shops. |
+| [dps-fleet](https://github.com/DaemonAlex/dps-fleet) | Vehicle browser and workshop on one panel: extras, liveries and mods for emergency vehicles. |
+| [dps-parking](https://github.com/DaemonAlex/dps-parking) | Parking with valet, impound, violations and reserved spots. |
+| [dps-vehiclepersistence](https://github.com/DaemonAlex/dps-vehiclepersistence) | Vehicles stay where they were parked. Pairs with dps-parking. |
+| [dps-towjob](https://github.com/DaemonAlex/dps-towjob) | Queue-based tow job with jg-mechanic integration. |
+| [dps-services](https://github.com/DaemonAlex/dps-services) | Request a tow and follow it live on the lb-phone and lb-tablet. Pairs with dps-towjob. |
+| [dps-autoshops](https://github.com/DaemonAlex/dps-autoshops) | Self-service repair shops when no mechanic is on duty. |
+| [dps-ainpcs](https://github.com/DaemonAlex/dps-ainpcs) | NPCs you can talk to, with trust, quests and intel. |
+| [dps-badpeds](https://github.com/DaemonAlex/dps-badpeds) | Police interaction with NPCs: stops, arrests, intel and jail records. |
+| [dps-gangwars](https://github.com/DaemonAlex/dps-gangwars) | Ambient gang NPCs, territory population and war reinforcements. |
+| [dps-rotations](https://github.com/DaemonAlex/dps-rotations) | Moves dealers, harvests and other spots on a fixed schedule. |
+| [dps-trains](https://github.com/DaemonAlex/dps-trains) | The train system. Pairs with dps-trains-stock, dps-traintools and dps-transitapp. |
+| [dps-transitapp](https://github.com/DaemonAlex/dps-transitapp) | Live train arrival boards on the lb-phone. |
+| [dps-faceplant](https://github.com/DaemonAlex/dps-faceplant) | City help, reports and staff tools on the lb-phone and lb-tablet. |
+| [dps-chat](https://github.com/DaemonAlex/dps-chat) | A command box for voice-only servers. No chat feed. |
+| [dps-filmmode](https://github.com/DaemonAlex/dps-filmmode) | One key hides every HUD layer and gives a smooth free camera for recording. |
