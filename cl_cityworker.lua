@@ -2,6 +2,7 @@ local Config = lib.require('config')
 local isHired, activeJob = false, false
 local cityBoss, startZone, currZone, currentCone
 local sitePoint = nil        -- the point that puts the site prop out when the worker is near
+local entryPoint = nil       -- manhole jobs: the point at the manhole on the street
 local JobBlip = nil
 local CITY_BLIP = nil
 local Depot = nil            -- vec4: where the boss stands. Sent by the server.
@@ -91,6 +92,11 @@ local function cleanupJob()
         sitePoint:remove()
         sitePoint = nil
     end
+    if entryPoint then
+        entryPoint:remove()
+        entryPoint = nil
+    end
+    if CurrentTask and CurrentTask.entry then lib.hideTextUI() end
     if currZone then
         RemoveTargetZone(currZone)
         currZone = nil
@@ -267,28 +273,54 @@ end
 -- NEXT TASK
 -- =====================================
 
-function NextDelivery(data)
-    if not data or not data.location then
-        Bridge.Notify('No work site is free right now. Ask again from the job menu (/citywork).', 'inform')
-        return
-    end
-
-    cleanupJob()
-    activeJob = true
-    CurrentTask = data
-
-    local at = vec3(data.location.x, data.location.y, data.location.z)
-    local taskType = data.taskType or 'pipe'
-
-    -- Blip and route to the site
+local function setJobBlip(at, text, route)
+    if JobBlip then RemoveBlip(JobBlip) end
     JobBlip = AddBlipForCoord(at.x, at.y, at.z)
     SetBlipSprite(JobBlip, 566)
     SetBlipColour(JobBlip, 5)
-    SetBlipRoute(JobBlip, true)
-    SetBlipRouteColour(JobBlip, 5)
+    if route then
+        SetBlipRoute(JobBlip, true)
+        SetBlipRouteColour(JobBlip, 5)
+    end
     BeginTextCommandSetBlipName("STRING")
-    AddTextComponentSubstringPlayerName('Task: ' .. (data.label or taskType))
+    AddTextComponentSubstringPlayerName(text)
     EndTextCommandSetBlipName(JobBlip)
+end
+
+--- Guide to a work spot the GPS cannot route to (down in the tunnels): the
+--- distance on screen, and an arrow over the spot once it is close.
+local function startGuide(data, at)
+    CreateThread(function()
+        local lastText, shown = 0, false
+        while CurrentTask == data do
+            local pos = GetEntityCoords(cache.ped)
+            local dist = #(pos - at)
+            local now = GetGameTimer()
+            if now - lastText > 500 then
+                lastText = now
+                local dz = at.z - pos.z
+                local hint = (dz > 3.0 and ' (above you)') or (dz < -3.0 and ' (below you)') or ''
+                lib.showTextUI(('Repair spot: %d m%s'):format(math.floor(dist), hint), { position = 'top-center' })
+                shown = true
+            end
+            if dist < 80.0 then
+                DrawMarker(2, at.x, at.y, at.z + 1.2, 0.0, 0.0, 0.0, 180.0, 0.0, 0.0, 0.5, 0.5, 0.5, 255, 122, 69, 220, true, true, 2, false, nil, nil, false)
+                Wait(0)
+            else
+                Wait(500)
+            end
+        end
+        if shown and not (CurrentTask and CurrentTask.entry and CurrentTask.entered) then lib.hideTextUI() end
+    end)
+end
+
+--- The work spot itself: blip, the place to press, the prop when near.
+--- `guided` is for a spot down a manhole: no GPS route, a guide instead.
+local function openSite(data, guided)
+    local at = vec3(data.location.x, data.location.y, data.location.z)
+    local taskType = data.taskType or 'pipe'
+
+    setJobBlip(at, (guided and 'Repair spot: ' or 'Task: ') .. (data.label or taskType), not guided)
 
     -- The spot to work at. Made first, so the job works even if the prop does not.
     currZone = AddTargetZone('cityworker_task_' .. tostring(data.id), {
@@ -324,6 +356,43 @@ function NextDelivery(data)
     end
     sitePoint = point
 
+    if guided then startGuide(data, at) end
+end
+
+function NextDelivery(data)
+    if not data or not data.location then
+        Bridge.Notify('No work site is free right now. Ask again from the job menu (/citywork).', 'inform')
+        return
+    end
+
+    cleanupJob()
+    activeJob = true
+    CurrentTask = data
+
+    -- A manhole job is two steps: the manhole on the street first, then the
+    -- repair spot down inside. The server opens step two when you are there.
+    if data.entry and not data.entered then
+        local entry = vec3(data.entry.x, data.entry.y, data.entry.z)
+        setJobBlip(entry, 'Manhole: ' .. (data.label or 'Manhole Check'), true)
+
+        local point = lib.points.new({ coords = entry, distance = 8 })
+        function point:onEnter()
+            if entryPoint ~= self or CurrentTask ~= data then return end
+            local ok = lib.callback.await('dps-cityworker:server:ReachedEntry', false, data.id)
+            if not ok or entryPoint ~= self or CurrentTask ~= data then return end
+            self:remove()
+            entryPoint = nil
+            data.entered = true
+            openSite(data, true)
+            Bridge.Notify('This is the manhole. Go down and follow the guide to the repair spot.', 'inform')
+        end
+        entryPoint = point
+
+        Bridge.Notify(('New task: %s. Go to the manhole on the street first.'):format(data.label or 'Manhole Check'), 'inform')
+        return
+    end
+
+    openSite(data, data.entry ~= nil)
     Bridge.Notify('New task: ' .. (data.label or 'Repair Task'), 'inform')
 end
 
@@ -1084,8 +1153,9 @@ function OpenWorkMenu()
             icon = 'fa-solid fa-location-dot',
             onSelect = function()
                 if CurrentTask then
-                    SetNewWaypoint(CurrentTask.location.x, CurrentTask.location.y)
-                    Bridge.Notify('GPS set to the work site', 'inform')
+                    local to = (CurrentTask.entry and not CurrentTask.entered) and CurrentTask.entry or CurrentTask.location
+                    SetNewWaypoint(to.x, to.y)
+                    Bridge.Notify('GPS set', 'inform')
                     return
                 end
                 local ok, task = lib.callback.await('dps-cityworker:server:RequestTask', false)

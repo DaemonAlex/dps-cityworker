@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS `city_work_sites` (
   `heading` float NOT NULL DEFAULT 0,
   `label` varchar(60) DEFAULT NULL,
   `added_by` varchar(60) DEFAULT NULL,
+  `parent` int(11) DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `kind` (`kind`)

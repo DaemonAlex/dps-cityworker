@@ -331,18 +331,41 @@ local TaskTypes = {
     fallen_tree = { label = 'Fallen Tree Removal', xp = 70, repairAmount = 6.0, difficulty = 'medium', minRank = 2, category = 'emergency', isEmergency = true },
 }
 
---- The saved spots for one kind of job, as a list of places.
+--- The saved spots a job can be given at: { coords = where the work is done,
+--- entry = where the worker goes first (manholes only) }.
+--- A manhole job is two steps: the manhole on the street, then the repair
+--- spot down inside. A street manhole with no spot saved inside is not used.
+local function spotsFor(taskType)
+    if taskType ~= 'manhole' then return Sites.of(taskType) end
+    local street = {}
+    for _, site in ipairs(Sites.of('manhole')) do street[site.id] = site end
+    local list = {}
+    for _, inside in ipairs(Sites.of('manhole_inside')) do
+        local top = street[inside.parent]
+        if top then list[#list + 1] = { coords = inside.coords, entry = top.coords } end
+    end
+    return list
+end
+
 local function locationsFor(taskType)
     local list = {}
-    for _, site in ipairs(Sites.of(taskType)) do list[#list + 1] = site.coords end
+    for _, site in ipairs(spotsFor(taskType)) do list[#list + 1] = site.coords end
     return list
+end
+
+--- The street entry that belongs to a work spot, if the job has one.
+local function entryFor(taskType, location)
+    for _, site in ipairs(spotsFor(taskType)) do
+        if site.entry and #(site.coords - location) < 0.5 then return site.entry end
+    end
+    return nil
 end
 
 --- How many job spots are saved in all (emergency spots not counted).
 local function workSiteCount()
     local n = 0
     for id, task in pairs(TaskTypes) do
-        if not task.isEmergency then n = n + #Sites.of(id) end
+        if not task.isEmergency then n = n + #spotsFor(id) end
     end
     return n
 end
@@ -351,7 +374,7 @@ end
 local function tasksForRank(rank)
     local available = {}
     for taskId, task in pairs(TaskTypes) do
-        if not task.isEmergency and rank >= task.minRank and #Sites.of(taskId) > 0 then
+        if not task.isEmergency and rank >= task.minRank and #spotsFor(taskId) > 0 then
             available[#available + 1] = taskId
         end
     end
@@ -602,6 +625,8 @@ local function taskView(job)
     return {
         id = job.id,
         location = job.location,
+        entry = job.entry,
+        entered = job.entered or false,
         taskType = job.type,
         type = job.type,
         label = task.label,
@@ -650,6 +675,7 @@ local function issueTask(source, forcedType)
         id = p.taskSeq,
         type = taskType,
         location = location,
+        entry = entryFor(taskType, location),   -- manholes: the street manhole to go down first
         from = from,
         issuedAt = os.time(),
         startedAt = nil,
@@ -820,6 +846,7 @@ lib.callback.register('dps-cityworker:server:BeginTask', function(source, taskId
     local job = p and p.task
     if not job or job.id ~= taskId then return false, 'That is not your current job' end
 
+    if job.entry and not job.entered then return false, 'Go down through the manhole first' end
     local pos = GetEntityCoords(GetPlayerPed(source))
     if #(pos - job.location) > (Config.TaskCompleteDistance or 12.0) then return false, 'You are not at the work site' end
 
@@ -834,6 +861,19 @@ lib.callback.register('dps-cityworker:server:BeginTask', function(source, taskId
 
     job.startedAt = os.time()
     return true, TaskSeconds(job.type)
+end)
+
+--- Step one of a manhole job: the worker is at the manhole on the street.
+--- The server checks it, and only then is the repair spot inside open to them.
+lib.callback.register('dps-cityworker:server:ReachedEntry', function(source, taskId)
+    local p = Players[source]
+    local job = p and p.task
+    if not job or job.id ~= taskId or not job.entry then return false end
+    if job.entered then return true end
+    local pos = GetEntityCoords(GetPlayerPed(source))
+    if #(pos - job.entry) > (T.entryDistance or 15.0) then return false end
+    job.entered = true
+    return true
 end)
 
 lib.callback.register('dps-cityworker:server:Payment', function(source, taskId)
@@ -1031,7 +1071,7 @@ local function controlData()
         local sites = 0
         for taskId, task in pairs(TaskTypes) do
             if not task.isEmergency then
-                for _, site in ipairs(Sites.of(taskId)) do
+                for _, site in ipairs(spotsFor(taskId)) do
                     if GetSectorForCoords(site.coords) == id then sites = sites + 1 end
                 end
             end
@@ -1099,10 +1139,10 @@ lib.callback.register('dps-cityworker:server:DispatchWorker', function(source, t
     -- Jobs this worker has the rank for, that have a spot in the sector
     local options = {}
     for _, taskId in ipairs(tasksForRank(target.rank)) do
-        for _, site in ipairs(Sites.of(taskId)) do
+        for _, site in ipairs(spotsFor(taskId)) do
             if GetSectorForCoords(site.coords) == sectorId
                 and not (target.task and #(site.coords - target.task.location) < 5.0) then
-                options[#options + 1] = { type = taskId, coords = site.coords }
+                options[#options + 1] = { type = taskId, coords = site.coords, entry = site.entry }
             end
         end
     end
@@ -1118,6 +1158,7 @@ lib.callback.register('dps-cityworker:server:DispatchWorker', function(source, t
         id = target.taskSeq,
         type = pick.type,
         location = pick.coords,
+        entry = pick.entry,
         from = (ped and ped ~= 0) and GetEntityCoords(ped) or pick.coords,
         issuedAt = os.time(),
         assignedBy = Bridge.GetCharacterName(source),
@@ -1414,7 +1455,7 @@ lib.callback.register('dps-cityworker:server:AssignWorkerTask', function(source,
 
     local target = Players[targetId]
     if target.task then target.lastLocation = target.task.location end
-    if #Sites.of(taskType) == 0 then return false, 'No site is set up for that job' end
+    if #spotsFor(taskType) == 0 then return false, 'No site is set up for that job' end
     local old = target.task
     local view = issueTask(targetId, taskType)
     if not view then

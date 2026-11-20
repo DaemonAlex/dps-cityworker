@@ -6,6 +6,9 @@
     in the city_work_sites table. Nothing is typed in by hand.
 
     Kinds: one per job type (pipe, pothole, ...), plus
+      manhole   - the manhole on the street (step one of a manhole job)
+      inside    - the repair spot down inside; it belongs to the street manhole
+                  you saved last (or the nearest one)
       emergency - where an emergency can happen
       depot     - where the boss stands (one only)
       truck     - where the work truck comes out (one only)
@@ -20,7 +23,7 @@ Sites = {}
 local KINDS = {
     pipe = 'pipe', pothole = 'pothole',
     meter = 'meter_reading', meter_reading = 'meter_reading',
-    hydrant = 'hydrant', manhole = 'manhole',
+    hydrant = 'hydrant', manhole = 'manhole', inside = 'manhole_inside', manhole_inside = 'manhole_inside',
     drain = 'storm_drain', storm_drain = 'storm_drain',
     electrical = 'electrical', transformer = 'transformer',
     bridge = 'bridge_inspection', bridge_inspection = 'bridge_inspection',
@@ -28,10 +31,11 @@ local KINDS = {
     emergency = 'emergency', depot = 'depot', truck = 'truck',
 }
 local ONE_ONLY = { depot = true, truck = true }
-local KIND_HELP = 'pipe, pothole, meter, hydrant, manhole, drain, electrical, transformer, bridge, utility, emergency, depot, truck'
+local KIND_HELP = 'pipe, pothole, meter, hydrant, manhole, inside, drain, electrical, transformer, bridge, utility, emergency, depot, truck'
 
 local byKind = {}   -- kind -> { { id, kind, coords = vector3, heading, label }, ... }
 local loaded = false
+local lastManhole = {}   -- admin source -> id of the street manhole they saved last
 
 local function publishDepot()
     local d = Sites.depot()
@@ -40,7 +44,7 @@ end
 
 local function addRow(row)
     local site = {
-        id = row.id, kind = row.kind, label = row.label,
+        id = row.id, kind = row.kind, label = row.label, parent = row.parent,
         coords = vector3(row.x + 0.0, row.y + 0.0, row.z + 0.0),
         heading = (row.heading or 0) + 0.0,
     }
@@ -68,7 +72,8 @@ local function load()
                   KEY `kind` (`kind`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             ]])
-            return MySQL.query.await('SELECT id, kind, x, y, z, heading, label FROM city_work_sites ORDER BY id')
+            MySQL.query.await('ALTER TABLE city_work_sites ADD COLUMN IF NOT EXISTS `parent` int(11) DEFAULT NULL')
+            return MySQL.query.await('SELECT id, kind, x, y, z, heading, label, parent FROM city_work_sites ORDER BY id')
         end)
         if ok and res then rows = res break end
         Wait(1000)
@@ -136,19 +141,45 @@ lib.addCommand('cityspot', {
     local z = kind == 'depot' and (pos.z - 1.0) or pos.z
     local label = args.label and args.label:sub(1, 60) or nil
 
+    -- A repair spot inside belongs to a street manhole: the one this admin
+    -- saved last, else the nearest one.
+    local parent, parentSite
+    if kind == 'manhole_inside' then
+        local bestDist
+        for _, site in ipairs(byKind.manhole or {}) do
+            if site.id == lastManhole[source] then parentSite = site break end
+            local d = #(pos - site.coords)
+            if not bestDist or d < bestDist then parentSite, bestDist = site, d end
+        end
+        if not parentSite then
+            return say(source, 'Save the manhole on the street first: /cityspot manhole', 'error')
+        end
+        parent = parentSite.id
+    end
+
     if ONE_ONLY[kind] then
         MySQL.query.await('DELETE FROM city_work_sites WHERE kind = ?', { kind })
         byKind[kind] = nil
     end
 
     local id = MySQL.insert.await(
-        'INSERT INTO city_work_sites (kind, x, y, z, heading, label, added_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        { kind, pos.x, pos.y, z, heading, label, Bridge.GetIdentifier(source) })
+        'INSERT INTO city_work_sites (kind, x, y, z, heading, label, added_by, parent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        { kind, pos.x, pos.y, z, heading, label, Bridge.GetIdentifier(source), parent })
     if not id then return say(source, 'The spot could not be saved', 'error') end
 
-    addRow({ id = id, kind = kind, x = pos.x, y = pos.y, z = z, heading = heading, label = label })
+    addRow({ id = id, kind = kind, x = pos.x, y = pos.y, z = z, heading = heading, label = label, parent = parent })
     if kind == 'depot' then publishDepot() end
 
+    if kind == 'manhole' then
+        lastManhole[source] = id
+        return say(source, 'Saved: street manhole. Now go down and save the repair spot with /cityspot inside', 'success')
+    end
+    if kind == 'manhole_inside' then
+        local n = 0
+        for _, site in ipairs(byKind.manhole_inside) do if site.parent == parent then n = n + 1 end end
+        return say(source, ('Saved: repair spot inside manhole %s (%d inside it now)'):format(
+            parentSite.label and ('"' .. parentSite.label .. '"') or ('#' .. parent), n), 'success')
+    end
     say(source, ('Saved: %s (%d of this kind now)'):format(kind, #byKind[kind]), 'success')
 end)
 
@@ -193,5 +224,14 @@ lib.addCommand('cityspotdel', {
     local site = table.remove(byKind[bestKind], bestIndex)
     MySQL.query.await('DELETE FROM city_work_sites WHERE id = ?', { site.id })
     if bestKind == 'depot' then publishDepot() end
+    if bestKind == 'manhole' then
+        -- The repair spots inside it go with it
+        MySQL.query.await('DELETE FROM city_work_sites WHERE kind = ? AND parent = ?', { 'manhole_inside', site.id })
+        local keep = {}
+        for _, inside in ipairs(byKind.manhole_inside or {}) do
+            if inside.parent ~= site.id then keep[#keep + 1] = inside end
+        end
+        byKind.manhole_inside = keep
+    end
     say(source, ('Deleted: %s (%.0f m away)'):format(bestKind, bestDist), 'success')
 end)

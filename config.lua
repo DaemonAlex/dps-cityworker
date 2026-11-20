@@ -33,6 +33,7 @@ return {
         seconds = { easy = 6, medium = 8, hard = 12 }, -- how long the work takes, by difficulty
         minTravel = 150.0,    -- a new job is at least this far from where the worker stands
         truckDistance = 80.0, -- the work truck must be this close to the site (0 = truck not needed)
+        entryDistance = 15.0, -- manholes: how close to the street manhole counts as "there"
         noTruck = { manhole = true }, -- jobs that never need the truck near (manholes can be down in the tunnels)
         skipCooldown = 600,   -- seconds between swapping a job you cannot reach
         truckCooldown = 120,  -- seconds between replacement trucks at the depot
