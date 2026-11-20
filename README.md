@@ -105,6 +105,7 @@ Notes:
 
 | Command | Who | What it does |
 |---|---|---|
+| `/citywork` | On shift | Opens the job menu: rank, grid, GPS to your job, job swap, damage report. Foremen also get the Control Room and can give a worker a job. |
 | `/workstatus` | Everyone | Shows rank, XP, and repair count. |
 | `/controlroom` | Rank 5 on duty | Opens the Control Room. |
 | `/company` | Everyone | Opens the sub-contractor company menu. |
@@ -348,6 +349,18 @@ The Emergency table is not read by the code. The values are fixed in the server 
 
 ## Recent changes
 
+- **20 November 2026 (3.0.0).** The job was rebuilt so the server runs it.
+  - **Job tickets.** Every job is a ticket the server keeps. You start the work at the site with your truck nearby, the work time has to pass, and the ticket is paid once. Asking for a new job no longer pays (the old free reroll is gone); a job you cannot reach can be swapped once every 10 minutes.
+  - **Driving money.** A new job is always a drive away, and a job across the map pays more.
+  - **Blackouts work.** Dark sectors are kept by the server in `GlobalState.dpsCityBlackouts`. A repair turns the lights back on for everyone, and players who join later see the blackout.
+  - **Every site repairs a sector.** A site outside all sectors counts for the nearest one. A sector in bad shape gets half of the new jobs.
+  - **Sandy Shores has work sites**, so Sandy contracts can be finished.
+  - **Job menu:** `/citywork` (also at the boss) shows rank, XP, the grid, your job on the GPS, job swap and damage reports. Foremen can open the Control Room and give a worker a job from it.
+  - **Truck:** shifts start at the depot only. The server sets the plate and gives wasabi_carlock keys. A lost truck is replaced at the boss. Trucks are removed when the script stops.
+  - **Emergencies:** rank and work time are checked by the server; workers who clock in later still see a running emergency.
+  - **Weather:** the server reads the weather itself. Rain makes storm drain jobs pay 25% more for 10 minutes.
+  - **Contractors:** the crew share comes out of the contract budget, joining a crew needs the worker next to you and a yes from them, and a failed withdrawal takes nothing.
+  - `/reportdamage` works again. The `electronics` drop is now `salvaged_electronics`.
 - **12 November 2026.** README: what it is for, how it works alone and with paid scripts, other DPS scripts.
 - **25 October 2026.** Synced with the live server: the DelPerroSands logo was added to the panel, with small fixes to the panel styling.
 - **4 October 2026.** The Control Room and company panels got the DelPerroSands look: orange panels, white outlines and the Roboto font. The README was rewritten with features, prerequisites, install steps and settings.

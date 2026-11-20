@@ -14,6 +14,7 @@ local OwnerToCompany = {}   -- [ownerIdentifier] = companyId
 local ActiveByCompany = {}  -- [companyId] = contract row (with .deadlineTs)
 local ActiveBySector = {}   -- [sectorId] = companyId
 local Crew           = {}   -- [companyId] = { [identifier] = true }  (session crews)
+local Busy           = {}   -- [identifier] = true while a register / accept / hire is being worked out
 
 local function regFee()
     return (Config.Economy and Config.Economy.CompanyRegistrationFee) or 5000
@@ -77,18 +78,20 @@ local function completeContract(companyId, ct)
     local company = Companies[companyId]
     if not company then return end
 
-    company.balance = company.balance + ct.budget
+    -- The crew's share comes out of the budget. (It used to be paid on top.)
+    local members = onlineCrewSources(companyId)
+    local cut = #members > 0 and math.floor(ct.budget * (C.employeeCut or 0.15)) or 0
+    local each = #members > 0 and math.floor(cut / #members) or 0
+    cut = each * #members
+
+    company.balance = company.balance + (ct.budget - cut)
     company.reputation = company.reputation + (C.reputationPerContract or 10)
     MySQL.update.await('UPDATE city_contractors SET balance = ?, reputation = ? WHERE id = ?',
         { company.balance, company.reputation, companyId })
     MySQL.update.await("UPDATE city_contracts SET status = 'completed', progress = ? WHERE id = ?",
         { ct.progress, ct.id })
 
-    -- Split the crew cut among online crew members
-    local cut = math.floor(ct.budget * (C.employeeCut or 0.15))
-    local members = onlineCrewSources(companyId)
-    if #members > 0 and cut > 0 then
-        local each = math.floor(cut / #members)
+    if each > 0 then
         for _, src in ipairs(members) do
             Bridge.AddMoney(src, 'cash', each, 'contract-crew-bonus')
             Bridge.Notify(src, ('Crew bonus: +$%d — %s contract complete'):format(each, company.name), 'success')
@@ -97,7 +100,7 @@ local function completeContract(companyId, ct)
 
     local ownerSrc = getOnlineByIdentifier(company.owner)
     if ownerSrc then
-        Bridge.Notify(ownerSrc, ('Contract complete! +$%d to %s (reputation %d)'):format(ct.budget, company.name, company.reputation), 'success')
+        Bridge.Notify(ownerSrc, ('Contract complete! +$%d to %s (reputation %d)'):format(ct.budget - cut, company.name, company.reputation), 'success')
     end
 
     ActiveByCompany[companyId] = nil
@@ -170,6 +173,9 @@ local function registerCompany(source, name)
     local id = Bridge.GetIdentifier(source)
     if not id then return false, 'Player not found' end
     if OwnerToCompany[id] then return false, 'You already own a company' end
+    if Busy[id] then return false, 'One thing at a time' end
+    Busy[id] = true
+    local ok, a, b = pcall(function()
 
     local rank = exports['dps-cityworker']:GetPlayerSeniority(source) or 1
     if rank < (C.minRankToRegister or 3) then
@@ -194,6 +200,11 @@ local function registerCompany(source, name)
     OwnerToCompany[id] = companyId
     Crew[companyId] = {}
     return true, ('Registered "%s"! Accept city contracts to earn.'):format(name)
+
+    end)
+    Busy[id] = nil
+    if not ok then print('[dps-cityworker] registerCompany failed: ' .. tostring(a)); return false, 'Something went wrong' end
+    return a, b
 end
 
 local function acceptContract(source, contractId)
@@ -201,9 +212,14 @@ local function acceptContract(source, contractId)
     local companyId = OwnerToCompany[id]
     if not companyId then return false, 'You do not own a company' end
     if ActiveByCompany[companyId] then return false, 'You already have an active contract' end
+    if Busy[id] then return false, 'One thing at a time' end
 
-    local ct = MySQL.single.await("SELECT * FROM city_contracts WHERE id = ? AND status = 'open'", { contractId })
+    Busy[id] = true
+    local ct = MySQL.single.await("SELECT * FROM city_contracts WHERE id = ? AND status = 'open'", { tonumber(contractId) })
+    Busy[id] = nil
     if not ct then return false, 'That contract is no longer available' end
+    -- Checked again after the wait on the database: two owners can ask at once
+    if ActiveByCompany[companyId] then return false, 'You already have an active contract' end
     if ActiveBySector[ct.sector_id] then return false, 'Another company already holds that sector' end
 
     local deadlineTs = os.time() + (C.contractDeadline or 3600)
@@ -229,8 +245,11 @@ local function withdrawFunds(source, amount)
     if company.balance < amount then return false, 'Insufficient company balance' end
 
     company.balance = company.balance - amount
+    if not Bridge.AddMoney(source, C.withdrawAccount or 'bank', amount, 'company-withdrawal') then
+        company.balance = company.balance + amount
+        return false, 'The money could not be paid out. Nothing was taken.'
+    end
     MySQL.update.await('UPDATE city_contractors SET balance = ? WHERE id = ?', { company.balance, companyId })
-    Bridge.AddMoney(source, C.withdrawAccount or 'bank', amount, 'company-withdrawal')
     return true, ('Withdrew $%d to your %s'):format(amount, C.withdrawAccount or 'bank')
 end
 
@@ -243,6 +262,19 @@ local function hireWorker(source, targetId)
     local targetIdent = targetId and Bridge.GetIdentifier(targetId)
     if not targetIdent then return false, 'No worker found nearby' end
     if targetIdent == id then return false, 'You are the owner' end
+    if Crew[companyId] and Crew[companyId][targetIdent] then return false, 'Already in your crew' end
+
+    -- The worker has to be next to you, and has to say yes
+    local mine, theirs = GetPlayerPed(source), GetPlayerPed(targetId)
+    if mine == 0 or theirs == 0 or #(GetEntityCoords(mine) - GetEntityCoords(theirs)) > (C.hireDistance or 10.0) then
+        return false, 'That worker is not next to you'
+    end
+    if Busy[id] then return false, 'One thing at a time' end
+    Busy[id] = true
+    local ok, yes = pcall(lib.callback.await, 'dps-cityworker:client:crewInvite', targetId, Companies[companyId].name)
+    Busy[id] = nil
+    if not ok or not yes then return false, 'They said no' end
+    if not Bridge.GetIdentifier(targetId) then return false, 'They left' end
 
     Crew[companyId] = Crew[companyId] or {}
     Crew[companyId][targetIdent] = true

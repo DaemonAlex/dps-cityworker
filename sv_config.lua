@@ -13,6 +13,11 @@ return {
 
     -- Generic Locations (fallback for any task type)
     Locations = {
+        vec3(1649.71, 3789.61, 34.79),  -- Sandy Shores, west side
+        vec3(1702.28, 3769.26, 33.84),  -- Sandy Shores, Algonquin Blvd
+        vec3(1785.58, 3330.47, 41.38),  -- Sandy Shores airfield road
+        vec3(1878.44, 3760.10, 32.94),  -- Sandy Shores, Alhambra Dr
+        vec3(2005.07, 3774.33, 32.18),  -- Sandy Shores fuel station
         vec3(1262.34, -1755.69, 49.35),
         vec3(1293.31, -1746.18, 53.88),
         vec3(546.91, -1958.31, 24.98),
@@ -39,6 +44,7 @@ return {
     CategoryLocations = {
         -- Maintenance tasks (pipes, hydrants, infrastructure)
         maintenance = {
+            vec3(1878.44, 3760.10, 32.94),  -- Sandy Shores, Alhambra Dr
             vec3(1262.34, -1755.69, 49.35),
             vec3(546.91, -1958.31, 24.98),
             vec3(492.9, -1342.64, 29.27),
@@ -50,6 +56,7 @@ return {
 
         -- Road tasks (potholes, signs, traffic control)
         road = {
+            vec3(1702.28, 3769.26, 33.84),  -- Sandy Shores, Algonquin Blvd
             vec3(150.23, -1035.44, 29.34),  -- Legion Square
             vec3(-267.85, -960.15, 31.22),  -- Alta St
             vec3(378.16, -828.95, 29.30),   -- Mission Row
@@ -61,6 +68,7 @@ return {
 
         -- Electrical tasks (streetlights, boxes, transformers)
         electrical = {
+            vec3(2005.07, 3774.33, 32.18),  -- Sandy Shores fuel station
             vec3(102.81, -1280.89, 29.25),
             vec3(-207.19, -1115.12, 22.86),
             vec3(210.06, -169.09, 56.32),
@@ -72,6 +80,7 @@ return {
 
         -- Cleanup tasks (graffiti, trash, hazmat)
         cleanup = {
+            vec3(1649.71, 3789.61, 34.79),  -- Sandy Shores, west side
             vec3(89.53, -1952.24, 20.75),   -- Grove Street
             vec3(313.17, -2034.65, 20.89),  -- Ballas territory
             vec3(-1178.52, -1573.24, 4.36), -- Del Perro
@@ -83,6 +92,7 @@ return {
 
         -- Utility tasks (meters, cables, locating)
         utility = {
+            vec3(1785.58, 3330.47, 41.38),  -- Sandy Shores airfield road
             vec3(-240.75, -901.54, 33.44),  -- Downtown
             vec3(301.95, -579.28, 43.26),   -- Rockford Hills
             vec3(-1093.42, -248.35, 37.76), -- West Vinewood
@@ -94,6 +104,7 @@ return {
 
         -- Sewer tasks (manholes, storm drains)
         sewer = {
+            vec3(1878.44, 3760.10, 32.94),  -- Sandy Shores, Alhambra Dr
             vec3(251.54, -1357.55, 30.55),
             vec3(560.81, -1630.79, 27.69),
             vec3(756.45, -1099.05, 22.32),

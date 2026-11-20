@@ -4,6 +4,8 @@ local cityBoss, startZone, currZone, currentCone
 local JobBlip = nil
 local CurrentTask = nil
 local ControlRoomOpen = false
+local Working = false        -- true while a repair is being done, so it cannot be started twice
+local TrafficBegun = nil     -- id of the traffic control job the server has been told about
 
 -- =====================================
 -- BLIP SETUP
@@ -117,7 +119,7 @@ local function resetJob()
     activeJob = false
 
     if DoesEntityExist(cityBoss) then
-        RemoveTargetEntity(cityBoss, {'Start Work', 'Finish Work'})
+        RemoveTargetEntity(cityBoss, {'Start Work', 'Replace Work Truck', 'Job Menu', 'Finish Work'})
         DeleteEntity(cityBoss)
         cityBoss = nil
     end
@@ -371,8 +373,49 @@ function NextDelivery(data)
     Bridge.Notify('New task: ' .. taskLabel, 'inform')
 end
 
+local function finishTask(result, doneText)
+    if currZone then
+        RemoveTargetZone(currZone)
+        currZone = nil
+    end
+    if currentCone then
+        DeleteEntity(currentCone)
+        currentCone = nil
+    end
+    if JobBlip then
+        RemoveBlip(JobBlip)
+        JobBlip = nil
+    end
+    StopAllParticles()
+    CurrentTask = nil
+    activeJob = false
+
+    local text = (doneText .. ' +$%d | +%d XP'):format(result.payment, result.xp)
+    if (result.travelPay or 0) > 0 then text = text .. (' (driving money $%d)'):format(result.travelPay) end
+    Bridge.Notify(text, 'success')
+    if result.sectorId then
+        Bridge.Notify(('%s is now at %.0f%%'):format(result.sectorLabel or result.sectorId, result.sectorHealth), 'inform')
+    end
+
+    Wait(5000)
+    if isHired and result.nextTask then NextDelivery(result.nextTask) end
+end
+
 function DoRepairTask()
-    if not activeJob or not CurrentTask then return end
+    if not activeJob or not CurrentTask or Working then return end
+    Working = true
+    local ok, err = pcall(DoRepairTaskInner)
+    Working = false
+    if not ok then print('[dps-cityworker] repair failed: ' .. tostring(err)) end
+end
+
+function DoRepairTaskInner()
+    -- The server checks you are at the site with your truck, and starts the clock
+    local began, info = lib.callback.await('dps-cityworker:server:BeginTask', false, CurrentTask.id)
+    if not began then
+        Bridge.Notify(info or 'You cannot start this job yet', 'error')
+        return
+    end
 
     local taskType = CurrentTask.taskType or 'pipe'
     local category = CurrentTask.category or 'maintenance'
@@ -383,8 +426,8 @@ function DoRepairTask()
     lib.requestAnimDict(animData.dict)
     TaskPlayAnim(cache.ped, animData.dict, animData.anim, 8.0, -8.0, -1, 1, 0, false, false, false)
 
-    -- Get duration based on difficulty
-    local duration = TaskDurations[difficulty] or 8000
+    -- How long the work takes comes from the server (it will not pay sooner)
+    local duration = (tonumber(info) and info * 1000) or TaskDurations[difficulty] or 8000
 
     -- Task-specific labels
     local taskLabels = {
@@ -438,41 +481,12 @@ function DoRepairTask()
         return
     end
 
-    -- Get payment and next task
-    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false)
+    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false, CurrentTask.id)
 
     if paymentSuccess and result then
-        -- Clean up current task
-        if currZone then
-            RemoveTargetZone(currZone)
-            currZone = nil
-        end
-        if currentCone then
-            DeleteEntity(currentCone)
-            currentCone = nil
-        end
-
-        -- Show results
-        Bridge.Notify(('Task complete! +$%d | +%d XP'):format(result.payment, result.xp), 'success')
-
-        if result.sectorId then
-            Bridge.Notify(('%s sector health: %.0f%%'):format(result.sectorId, result.sectorHealth), 'inform')
-        end
-
-        -- Get next task (wait before assigning new task)
-        Wait(5000)
-
-        if isHired and result.nextTask then
-            NextDelivery({
-                location = result.nextTask.location,
-                taskType = result.nextTask.type,
-                label = result.nextTask.label,
-                category = result.nextTask.category,
-                difficulty = result.nextTask.difficulty,
-            })
-        end
+        finishTask(result, 'Job done!')
     else
-        Bridge.Notify('Something went wrong', 'error')
+        Bridge.Notify('The city could not sign this job off. Stay at the site and try again.', 'error')
     end
 end
 
@@ -492,27 +506,19 @@ local function startWork(netid, data)
         return
     end
 
-    SetVehicleNumberPlateText(workVehicle, 'CITY' .. tostring(math.random(1000, 9999)))
+    -- The plate and the keys are set by the server
     SetVehicleColours(workVehicle, 111, 111)
     SetVehicleDirtLevel(workVehicle, 1)
-    handleVehicleKeys(workVehicle)
+    if GetResourceState('wasabi_carlock') ~= 'started' then handleVehicleKeys(workVehicle) end
     SetVehicleEngineOn(workVehicle, true, true)
-
-    isHired = true
-
-    -- Handle fuel (uses Bridge multi-fuel support)
     Bridge.SetVehicleFuel(workVehicle, 100.0)
 
-    Bridge.Notify('You started your shift!', 'success')
+    if not data then return end   -- a replacement truck: the shift is already running
 
-    -- Start first task
-    NextDelivery({
-        location = data.location,
-        taskType = data.taskType,
-        label = data.label or 'Repair Task',
-        category = data.category,
-        difficulty = data.difficulty,
-    })
+    isHired = true
+    Bridge.Notify('You started your shift. /citywork opens your job menu.', 'success')
+    NextDelivery(data)
+    ShowActiveEmergencies()
 end
 
 local function finishWork()
@@ -542,7 +548,7 @@ end
 
 local function yeetPed()
     if DoesEntityExist(cityBoss) then
-        RemoveTargetEntity(cityBoss, {'Start Work', 'Finish Work'})
+        RemoveTargetEntity(cityBoss, {'Start Work', 'Replace Work Truck', 'Job Menu', 'Finish Work'})
         DeleteEntity(cityBoss)
         cityBoss = nil
     end
@@ -569,11 +575,37 @@ local function spawnPed()
                 if netid then
                     startWork(netid, data)
                 else
-                    Bridge.Notify('Could not start work', 'error')
+                    Bridge.Notify(data or 'Could not start work', 'error')
                 end
             end,
             canInteract = function()
                 return not isHired
+            end,
+        },
+        {
+            icon = 'fas fa-truck-pickup',
+            label = 'Replace Work Truck',
+            action = function()
+                local netid, why = lib.callback.await('dps-cityworker:server:newTruck', false)
+                if netid then
+                    startWork(netid, nil)
+                    Bridge.Notify('Here is another truck. Look after this one.', 'success')
+                else
+                    Bridge.Notify(why or 'No truck available', 'error')
+                end
+            end,
+            canInteract = function()
+                return isHired
+            end,
+        },
+        {
+            icon = 'fas fa-clipboard-list',
+            label = 'Job Menu',
+            action = function()
+                OpenWorkMenu()
+            end,
+            canInteract = function()
+                return isHired
             end,
         },
         {
@@ -660,24 +692,28 @@ end)
 -- BLACKOUT EFFECTS
 -- =====================================
 
+-- Which sectors are dark is kept by the server in GlobalState.dpsCityBlackouts.
+-- Everyone reads the same list, so a repair turns the lights back on for all
+-- and a player who joins later sees the blackout too.
 local BlackoutActive = {}
+local blackoutThread = false
 
-RegisterNetEvent('dps-cityworker:client:TriggerBlackout', function(sectorId)
-    if BlackoutActive[sectorId] then return end
+local function insideDarkSector()
+    local pos = GetEntityCoords(cache.ped)
+    for sectorId in pairs(BlackoutActive) do
+        local sector = Config.Sectors[sectorId]
+        if sector and #(pos - sector.coords) < sector.radius then return true end
+    end
+    return false
+end
 
-    local sector = Config.Sectors[sectorId]
-    if not sector then return end
-
-    BlackoutActive[sectorId] = true
-
-    Bridge.Notify(('ALERT: %s experiencing power outage!'):format(sector.label), 'error')
-
-    -- Visual effect - flickering lights in area
+local function runBlackouts()
+    if blackoutThread then return end
+    blackoutThread = true
     CreateThread(function()
-        while BlackoutActive[sectorId] do
-            local playerPos = GetEntityCoords(cache.ped)
-            if #(playerPos - sector.coords) < sector.radius then
-                -- Flicker effect
+        SetArtificialLightsStateAffectsVehicles(false)   -- headlights keep working
+        while next(BlackoutActive) do
+            if insideDarkSector() then
                 SetArtificialLightsState(true)
                 Wait(math.random(100, 500))
                 SetArtificialLightsState(false)
@@ -687,13 +723,35 @@ RegisterNetEvent('dps-cityworker:client:TriggerBlackout', function(sectorId)
             end
         end
         SetArtificialLightsState(false)
+        blackoutThread = false
     end)
+end
+
+local function applyBlackouts(list)
+    list = type(list) == 'table' and list or {}
+    for sectorId in pairs(list) do
+        local sector = Config.Sectors[sectorId]
+        if sector and not BlackoutActive[sectorId] and (isHired or #(GetEntityCoords(cache.ped) - sector.coords) < sector.radius) then
+            Bridge.Notify(('ALERT: %s has lost power!'):format(sector.label), 'error')
+        end
+    end
+    for sectorId in pairs(BlackoutActive) do
+        local sector = Config.Sectors[sectorId]
+        if sector and not list[sectorId] and isHired then
+            Bridge.Notify(('%s has power again'):format(sector.label), 'success')
+        end
+    end
+    BlackoutActive = list
+    if next(BlackoutActive) then runBlackouts() end
+end
+
+AddStateBagChangeHandler('dpsCityBlackouts', 'global', function(_, _, value)
+    applyBlackouts(value)
 end)
 
--- Clear blackout when sector is repaired
-RegisterNetEvent('dps-cityworker:client:ClearBlackout', function(sectorId)
-    BlackoutActive[sectorId] = nil
-    SetArtificialLightsState(false)
+CreateThread(function()
+    Wait(3000)
+    applyBlackouts(GlobalState.dpsCityBlackouts)
 end)
 
 -- =====================================
@@ -704,8 +762,9 @@ local ActiveEmergencyBlips = {}
 local EmergencyProps = {}
 local EmergencyProximityPoints = {} -- Proximity points that auto-create zones
 local EmergencyZoneCreated = {}     -- Track which sectors already have zones spawned
+local EmergencyZones = {}           -- sector -> target zone, so it can be removed again
 
-RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
+local function showEmergency(data, quiet)
     -- Create emergency blip
     if ActiveEmergencyBlips[data.sector] then
         RemoveBlip(ActiveEmergencyBlips[data.sector])
@@ -750,6 +809,7 @@ RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
     end
 
     EmergencyProximityPoints[data.sector] = point
+    if quiet then return end
 
     -- Only show detailed alert to on-duty workers
     if isHired then
@@ -789,7 +849,25 @@ RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
             duration = 8000,
         })
     end
+end
+
+RegisterNetEvent('dps-cityworker:client:EmergencyAlert', function(data)
+    showEmergency(data, false)
 end)
+
+--- Emergencies that were already running when this worker clocked in.
+function ShowActiveEmergencies()
+    local list = lib.callback.await('dps-cityworker:server:GetActiveEmergencies', false) or {}
+    for sectorId, em in pairs(list) do
+        if not ActiveEmergencyBlips[sectorId] then
+            showEmergency({
+                sector = sectorId, type = em.type, label = em.label,
+                sectorLabel = em.sectorLabel, coords = em.coords, xpBonus = 0,
+            }, true)
+            Bridge.Notify(('Emergency in progress: %s at %s'):format(em.label, em.sectorLabel), 'warning')
+        end
+    end
+end
 
 function CreateEmergencyZone(data)
     -- Snap coords to actual ground level as a safety net
@@ -813,7 +891,8 @@ function CreateEmergencyZone(data)
 
     -- Create target zone at ground-corrected position
     local zoneName = 'emergency_' .. data.sector
-    AddTargetZone(zoneName, {
+    if EmergencyZones[data.sector] then RemoveTargetZone(EmergencyZones[data.sector]) end
+    EmergencyZones[data.sector] = AddTargetZone(zoneName, {
         coords = groundCoords,
         radius = 3.0,
     }, {
@@ -843,7 +922,7 @@ function RespondToEmergency(sectorId)
     lib.requestAnimDict(animData.dict)
 
     local success = lib.progressBar({
-        duration = 15000, -- Emergencies take longer
+        duration = (emergencyData.seconds or 15) * 1000, -- Emergencies take longer
         label = ('EMERGENCY: %s'):format(emergencyData.label),
         useWhileDead = false,
         canCancel = true,
@@ -896,6 +975,10 @@ RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
         EmergencyProximityPoints[sectorId] = nil
     end
     EmergencyZoneCreated[sectorId] = nil
+    if EmergencyZones[sectorId] then
+        RemoveTargetZone(EmergencyZones[sectorId])
+        EmergencyZones[sectorId] = nil
+    end
 
     -- Stop particle effects
     if StopAllParticles then StopAllParticles() end
@@ -1004,7 +1087,17 @@ end
 local TrafficControlActive = false
 
 function OpenTrafficControlMenu()  -- forward-declared below the file header
-    if TrafficControlActive then return end
+    if TrafficControlActive or not CurrentTask then return end
+
+    -- Tell the server the work has started (once per job)
+    if TrafficBegun ~= CurrentTask.id then
+        local began, why = lib.callback.await('dps-cityworker:server:BeginTask', false, CurrentTask.id)
+        if not began then
+            Bridge.Notify(why or 'You cannot start this job yet', 'error')
+            return
+        end
+        TrafficBegun = CurrentTask.id
+    end
     TrafficControlActive = true
 
     lib.registerContext({
@@ -1081,38 +1174,18 @@ function CompleteTrafficControl()
         return
     end
 
-    -- Complete the task
-    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false)
+    if not CurrentTask then return end
+    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false, CurrentTask.id)
 
     if paymentSuccess and result then
-        -- Clean up placed props after a delay (simulating crew picks them up later)
+        -- The cones stay out for a minute, then the crew "collects" them
         SetTimeout(60000, function()
             ClearAllTrafficProps()
         end)
-
-        Bridge.Notify(('Traffic control complete! +$%d | +%d XP'):format(result.payment, result.xp), 'success')
-
-        -- Clean up current task zone
-        if currZone then
-            RemoveTargetZone(currZone)
-            currZone = nil
-        end
-        if currentCone then
-            DeleteEntity(currentCone)
-            currentCone = nil
-        end
-
-        Wait(5000)
-
-        if isHired and result.nextTask then
-            NextDelivery({
-                location = result.nextTask.location,
-                taskType = result.nextTask.type,
-                label = result.nextTask.label,
-                category = result.nextTask.category,
-                difficulty = result.nextTask.difficulty,
-            })
-        end
+        TrafficBegun = nil
+        finishTask(result, 'Traffic control set up!')
+    else
+        Bridge.Notify('The city could not sign this job off. Stay at the site and try again in a few seconds.', 'error')
     end
 end
 
@@ -1127,71 +1200,6 @@ end
 -- =====================================
 -- WEATHER-TRIGGERED EVENTS
 -- =====================================
-
-local WeatherTypes = {
-    RAIN = { 'RAIN', 'THUNDER', 'CLEARING' },
-    STORM = { 'THUNDER' },
-    CLEAR = { 'CLEAR', 'EXTRASUNNY', 'CLOUDS', 'OVERCAST', 'SMOG', 'FOGGY' },
-}
-
-local function IsWeatherType(weatherType, category)
-    local hash = GetPrevWeatherTypeHashName()
-    for _, weather in ipairs(WeatherTypes[category] or {}) do
-        if hash == GetHashKey(weather) then
-            return true
-        end
-    end
-    return false
-end
-
-local LastWeatherCheck = 0
-local WeatherEventCooldown = 600000 -- 10 minutes between weather events
-
--- Monitor weather and trigger appropriate events
-CreateThread(function()
-    while true do
-        Wait(60000) -- Check every minute
-
-        if not isHired then
-            Wait(5000)
-            goto continue
-        end
-
-        local currentTime = GetGameTimer()
-        if currentTime - LastWeatherCheck < WeatherEventCooldown then
-            goto continue
-        end
-
-        -- Check for rain - increased chance of storm drain tasks
-        if IsWeatherType(nil, 'RAIN') then
-            -- Notify server to potentially spawn storm drain clearing
-            TriggerServerEvent('dps-cityworker:server:WeatherEvent', 'rain')
-            LastWeatherCheck = currentTime
-
-            lib.notify({
-                title = 'Weather Alert',
-                description = 'Heavy rain detected. Storm drains may need clearing.',
-                type = 'warning',
-                duration = 8000,
-            })
-        end
-
-        -- Check for thunder - chance of fallen trees or downed power lines
-        if IsWeatherType(nil, 'STORM') then
-            TriggerServerEvent('dps-cityworker:server:WeatherEvent', 'storm')
-            LastWeatherCheck = currentTime
-
-            lib.notify({
-                title = 'Storm Warning',
-                description = 'Severe weather! Watch for fallen trees and downed lines.',
-                type = 'error',
-                duration = 10000,
-            })
-        end
-
-        ::continue::
-    end
-end)
 
 -- Weather task bonus notification
 local WeatherBonusActive = {}
@@ -1236,11 +1244,151 @@ RegisterNetEvent('dps-cityworker:client:TaskAssigned', function(data)
     cleanupJob()
 
     -- Start new assigned task
-    NextDelivery({
-        location = data.location,
-        taskType = data.type,
-        label = data.label,
+    NextDelivery(data)
+end)
+
+-- Asked to join a contractor's crew: the worker decides
+lib.callback.register('dps-cityworker:client:crewInvite', function(companyName)
+    local answer = lib.alertDialog({
+        header = 'Crew invite',
+        content = ('**%s** wants you on their work crew.\n\nYour jobs in their contract area count for them, and you get a share when the contract is done.'):format(tostring(companyName)),
+        centered = true,
+        cancel = true,
+        labels = { confirm = 'Join', cancel = 'No thanks' },
     })
+    return answer == 'confirm'
+end)
+
+-- =====================================
+-- JOB MENU (/citywork)
+-- =====================================
+
+local function sectorLines()
+    local sectors = lib.callback.await('dps-cityworker:server:GetSectorHealth', false) or {}
+    local lines = {}
+    for _, info in pairs(sectors) do
+        lines[#lines + 1] = ('%s: %.0f%%'):format(info.label, info.health)
+    end
+    table.sort(lines)
+    return table.concat(lines, '  \n')
+end
+
+local function assignMenu()
+    local workers = lib.callback.await('dps-cityworker:server:GetActiveWorkers', false) or {}
+    local tasks = lib.callback.await('dps-cityworker:server:TaskList', false) or {}
+    local me = cache.serverId
+    local options = {}
+    for id, w in pairs(workers) do
+        if tonumber(id) ~= me then
+            options[#options + 1] = {
+                title = w.name or ('Worker ' .. id),
+                description = w.rankLabel,
+                onSelect = function()
+                    local pick = {}
+                    for _, t in ipairs(tasks) do
+                        if (w.rank or 1) >= t.minRank then pick[#pick + 1] = { value = t.id, label = t.label } end
+                    end
+                    local input = lib.inputDialog('Give a job to ' .. (w.name or id), {
+                        { type = 'select', label = 'Job', options = pick, required = true },
+                    })
+                    if not input then return end
+                    local ok, msg = lib.callback.await('dps-cityworker:server:AssignWorkerTask', false, tonumber(id), input[1])
+                    Bridge.Notify(msg or (ok and 'Job given' or 'Could not give that job'), ok and 'success' or 'error')
+                end,
+            }
+        end
+    end
+    if #options == 0 then options[1] = { title = 'No other workers on shift', disabled = true } end
+    lib.registerContext({ id = 'cityworker_assign', title = 'Give a job', menu = 'cityworker_menu', options = options })
+    lib.showContext('cityworker_assign')
+end
+
+function OpenWorkMenu()
+    if not isHired then
+        Bridge.Notify('You are not on shift. Start work at the city depot.', 'error')
+        return
+    end
+    local stats = lib.callback.await('dps-cityworker:server:GetPlayerStats', false) or {}
+    local options = {
+        {
+            title = ('%s'):format(stats.rankLabel or 'City worker'),
+            description = ('XP %d / %d  |  Jobs done %d  |  Earned $%d'):format(
+                math.floor(stats.xp or 0), math.floor(stats.xpNeeded or 0), math.floor(stats.total_repairs or 0), math.floor(stats.total_earnings or 0)),
+            icon = 'fa-solid fa-id-badge',
+            readOnly = true,
+        },
+        {
+            title = CurrentTask and ('Current job: ' .. (CurrentTask.label or 'Repair')) or 'No job right now',
+            description = CurrentTask and 'Set the GPS to the work site' or 'A new job is on its way',
+            icon = 'fa-solid fa-location-dot',
+            disabled = not CurrentTask,
+            onSelect = function()
+                SetNewWaypoint(CurrentTask.location.x, CurrentTask.location.y)
+                Bridge.Notify('GPS set to the work site', 'inform')
+            end,
+        },
+        {
+            title = 'Swap this job',
+            description = 'For a site you cannot reach. Limited to once every few minutes.',
+            icon = 'fa-solid fa-shuffle',
+            disabled = not CurrentTask,
+            onSelect = function()
+                local ok, task = lib.callback.await('dps-cityworker:server:SkipTask', false)
+                if not ok then return Bridge.Notify(task or 'You cannot swap right now', 'error') end
+                cleanupJob()
+                NextDelivery(task)
+            end,
+        },
+        {
+            title = 'City grid',
+            description = sectorLines(),
+            icon = 'fa-solid fa-bolt',
+            readOnly = true,
+        },
+        {
+            title = 'Report damage here',
+            description = 'Log a fault where you are standing',
+            icon = 'fa-solid fa-triangle-exclamation',
+            onSelect = function()
+                local input = lib.inputDialog('Report damage', {
+                    { type = 'select', label = 'What is it?', required = true, default = 'general', options = {
+                        { value = 'general', label = 'General damage' }, { value = 'pothole', label = 'Pothole' },
+                        { value = 'streetlight', label = 'Streetlight' }, { value = 'pipe', label = 'Water pipe' },
+                        { value = 'electrical', label = 'Electrical' },
+                    } },
+                })
+                if not input then return end
+                local ok, msg = lib.callback.await('dps-cityworker:server:ReportDamage', false, input[1])
+                Bridge.Notify(msg or (ok and 'Reported' or 'Could not report'), ok and 'success' or 'error')
+            end,
+        },
+    }
+    if (stats.rank or 1) >= 5 then
+        options[#options + 1] = {
+            title = 'Control Room', description = 'Grid dashboard and crew dispatch', icon = 'fa-solid fa-tower-broadcast',
+            onSelect = function() TriggerEvent('dps-cityworker:client:OpenControlRoom') end,
+        }
+        options[#options + 1] = {
+            title = 'Give a worker a job', icon = 'fa-solid fa-people-arrows',
+            onSelect = assignMenu,
+        }
+    end
+    lib.registerContext({ id = 'cityworker_menu', title = 'City Worker', options = options })
+    lib.showContext('cityworker_menu')
+end
+
+RegisterCommand('citywork', function() OpenWorkMenu() end, false)
+
+-- Still on shift after this script restarted on the player's side: pick the job back up
+CreateThread(function()
+    Wait(4000)
+    if isHired then return end
+    local task = lib.callback.await('dps-cityworker:server:CurrentTask', false)
+    if task then
+        isHired = true
+        NextDelivery(task)
+        ShowActiveEmergencies()
+    end
 end)
 
 -- Teamwork bonus indicator
