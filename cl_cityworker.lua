@@ -118,10 +118,9 @@ end
 -- =====================================
 
 local function GetTaskProp(taskType)
-    if Config.TaskProps and Config.TaskProps[taskType] then
-        return Config.TaskProps[taskType]
-    end
-    return 'prop_roadcone02a' -- Default fallback
+    local prop = Config.TaskProps and Config.TaskProps[taskType]
+    if prop == false then return nil end   -- no marker for this job
+    return prop or 'prop_roadcone02a'
 end
 
 local function GetTaskAnimation(category)
@@ -142,7 +141,9 @@ end
 --- near, so the ground is loaded. Returns nil if the game will not make it:
 --- the job still works without the prop.
 function SpawnTaskProp(taskType, coords)
-    local model = safeModel(GetTaskProp(taskType))
+    local wanted = GetTaskProp(taskType)
+    if not wanted then return nil end
+    local model = safeModel(wanted)
     local ok = pcall(lib.requestModel, model, 5000)
     if not ok then return nil end
 

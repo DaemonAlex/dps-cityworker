@@ -33,6 +33,7 @@ return {
         seconds = { easy = 6, medium = 8, hard = 12 }, -- how long the work takes, by difficulty
         minTravel = 150.0,    -- a new job is at least this far from where the worker stands
         truckDistance = 80.0, -- the work truck must be this close to the site (0 = truck not needed)
+        noTruck = { manhole = true }, -- jobs that never need the truck near (manholes can be down in the tunnels)
         skipCooldown = 600,   -- seconds between swapping a job you cannot reach
         truckCooldown = 120,  -- seconds between replacement trucks at the depot
         needyBelow = 60,      -- a sector under this health gets half of the new jobs
@@ -104,10 +105,10 @@ return {
         pipe = 'prop_pipes_01a',
         pothole = 'prop_roadcone02a',
         meter_reading = 'prop_toolchest_05',
-        hydrant = 'prop_fire_hydrant_2',
+        hydrant = false,           -- false = no marker: the spot is a real one in the world
         manhole = 'prop_roadcone02a',
         storm_drain = 'prop_barrier_work06a',
-        electrical = 'prop_elecbox_01a',
+        electrical = false,
         transformer = 'prop_sub_trans_01a',
         bridge_inspection = 'prop_roadcone02a',
         utility_locating = 'prop_roadcone02a',

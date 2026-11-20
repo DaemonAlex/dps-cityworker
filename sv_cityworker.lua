@@ -823,7 +823,7 @@ lib.callback.register('dps-cityworker:server:BeginTask', function(source, taskId
     local pos = GetEntityCoords(GetPlayerPed(source))
     if #(pos - job.location) > (Config.TaskCompleteDistance or 12.0) then return false, 'You are not at the work site' end
 
-    if (T.truckDistance or 80.0) > 0 then
+    if (T.truckDistance or 80.0) > 0 and not (T.noTruck and T.noTruck[job.type]) then
         if not p.entity or not DoesEntityExist(p.entity) then
             return false, 'Your work truck is gone. Get a new one at the depot.'
         end
