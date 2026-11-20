@@ -23,7 +23,22 @@ return {
         WeeklyBudget = 50000, -- Government budget allocation (Roadmap feature)
         CompanyRegistrationFee = 5000, -- Cost to register a sub-contractor company
         MaterialCost = 50, -- Cost deducted if player buys their own supplies
+        TravelPayPer100m = 8, -- Driving money: paid per 100 m between where the job was handed out and the site
+        TravelPayMax = 400,   -- Most driving money one job can pay
     },
+
+    -- Job rules. The server keeps a ticket for every job and only pays against it.
+    Task = {
+        seconds = { easy = 6, medium = 8, hard = 12 }, -- how long the work takes, by difficulty
+        minTravel = 150.0,    -- a new job is at least this far from where the worker stands
+        truckDistance = 80.0, -- the work truck must be this close to the site (0 = truck not needed)
+        skipCooldown = 600,   -- seconds between swapping a job you cannot reach
+        truckCooldown = 120,  -- seconds between replacement trucks at the depot
+        needyBelow = 60,      -- a sector under this health gets half of the new jobs
+    },
+    TaskCompleteDistance = 12.0, -- how close to the site the worker must be
+    EmergencyDistance = 20.0,    -- how close to an emergency the worker must be
+    SectorReach = 3000.0,        -- a site outside every sector counts for the nearest one within this distance
 
     -- Scavenging System (find materials while working)
     ItemDrops = {
@@ -34,7 +49,7 @@ return {
             { name = 'copper',       min = 1, max = 3, chance = 50 }, -- Common
             { name = 'plastic',      min = 1, max = 4, chance = 30 },
             { name = 'metalscrap',   min = 2, max = 5, chance = 30 },
-            { name = 'electronics',  min = 1, max = 1, chance = 10 }, -- Rare
+            { name = 'salvaged_electronics', min = 1, max = 1, chance = 10 }, -- Rare
             { name = 'steel',        min = 1, max = 2, chance = 5 },  -- Very Rare
         },
     },
@@ -144,6 +159,8 @@ return {
         BonusMultiplier = 1.5, -- XP bonus for emergency response
         PaymentMultiplier = 2.0, -- Payment bonus for emergency
         MaxActivePerSector = 1, -- Only one emergency per sector
+        WorkSeconds = 15,       -- how long the emergency repair takes
+        WeatherCooldown = 900,  -- seconds between weather events (storm emergencies, rain bonus)
     },
 
     -- Sub-Contractor Company System
@@ -161,5 +178,6 @@ return {
         employeeCut = 0.15,         -- share of the budget split among online crew on completion
         withdrawAccount = 'bank',   -- account funds are withdrawn to
         bossPed = true,             -- spawn a targetable office ped at BossCoords
+        hireDistance = 10.0,        -- a worker must be this close, on shift, and say yes to join a crew
     },
 }
