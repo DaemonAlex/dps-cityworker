@@ -14,6 +14,7 @@ return {
 
     -- Boss / HQ Settings
     BossModel = `s_m_y_construct_02`,
+    -- Where the boss stands until an admin stands on the spot and runs /cityspot depot
     BossCoords = vec4(884.47, -2337.14, 29.34, 359.1),
     
     -- Economy & Contractor Settings
@@ -92,54 +93,30 @@ return {
 
     -- Minigame / Skill Check Settings
     SkillCheck = {
-        Difficulty = { 'easy', 'easy', 'medium' }, -- default difficulty sequence
-        HardDifficulty = { 'medium', 'medium', 'hard' }, -- for Specialists/High Voltage
+        Difficulty = { 'easy', 'easy', 'medium' }, -- used by jobs that have no check list of their own
         Input = {'e'}
     },
 
-    -- Task Props (visual markers for each task type)
-    -- All props verified to exist in GTA V
+    -- Task Props (the marker put out at a work site)
+    -- Every name here was checked against the GTA V object list on 2026-11-20.
+    -- A name the game does not have falls back to a road cone.
     TaskProps = {
-        -- Basic Tasks
-        pipe = 'prop_waterpump_01',
+        pipe = 'prop_pipes_01a',
         pothole = 'prop_roadcone02a',
-        meter_reading = 'prop_toolchest_05',      -- Toolbox for meter reading
-        graffiti = 'prop_cs_spray_can',
-        trash = 'prop_rub_binbag_01',
-
-        -- Intermediate Tasks
-        streetlight = 'prop_worklight_03b',       -- Work light
-        hydrant = 'prop_fire_hydrant_2',          -- Fire hydrant (verified)
-        sign_repair = 'prop_sign_road_01a',
-        manhole = 'prop_roadcone02a',             -- Cone marking manhole
-        storm_drain = 'prop_barrier_work06a',     -- Work barrier for drain
-
-        -- Advanced Tasks
+        meter_reading = 'prop_toolchest_05',
+        hydrant = 'prop_fire_hydrant_2',
+        manhole = 'prop_roadcone02a',
+        storm_drain = 'prop_barrier_work06a',
         electrical = 'prop_elecbox_01a',
-        traffic_control = 'prop_roadcone02a',
-        tree_trimming = 'prop_tree_stump_01',
-        cable_install = 'prop_rail_boxpile',      -- Cable box
-
-        -- Expert Tasks
-        transformer = 'prop_sub_trans_01',
-        hazmat = 'prop_barrel_01a',
+        transformer = 'prop_sub_trans_01a',
         bridge_inspection = 'prop_roadcone02a',
         utility_locating = 'prop_roadcone02a',
 
-        -- Emergency Tasks
-        water_main = 'prop_waterpump_01',
-        gas_leak = 'prop_barrel_02a',             -- Different barrel
-        downed_lines = 'prop_worklight_03a',      -- Work light marking danger
-        fallen_tree = 'prop_tree_fallen_02',      -- Fallen tree (verified)
-    },
-
-    -- Traffic Control Props (for setup tasks)
-    TrafficProps = {
-        Cone = 'prop_roadcone02a',
-        Barrier = 'prop_barrier_work05',
-        Sign_Stop = 'prop_sign_road_04b',
-        Sign_Slow = 'prop_sign_road_04a',
-        Light = 'prop_worklight_02a',
+        -- Emergencies
+        water_main = 'prop_pipes_01a',
+        gas_leak = 'prop_barrel_02a',
+        downed_lines = 'prop_worklight_03a',
+        fallen_tree = 'prop_tree_fallen_02',
     },
 
     -- Animation dictionaries per task category

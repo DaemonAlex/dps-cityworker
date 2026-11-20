@@ -85,3 +85,18 @@ INSERT IGNORE INTO `city_infrastructure` (`sector_id`, `health`) VALUES
   ('legion', 100.0),
   ('mirror_park', 100.0),
   ('sandy_shores', 100.0);
+
+-- Work sites captured in game with /cityspot (the script also creates this at start)
+CREATE TABLE IF NOT EXISTS `city_work_sites` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `kind` varchar(30) NOT NULL,
+  `x` float NOT NULL,
+  `y` float NOT NULL,
+  `z` float NOT NULL,
+  `heading` float NOT NULL DEFAULT 0,
+  `label` varchar(60) DEFAULT NULL,
+  `added_by` varchar(60) DEFAULT NULL,
+  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `kind` (`kind`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

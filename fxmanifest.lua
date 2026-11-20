@@ -5,7 +5,7 @@ lua54 'yes'
 name 'dps-cityworker'
 author 'DeamonScripts & Randol'
 description 'Advanced City Infrastructure & Career Simulation'
-version '3.0.0'
+version '3.1.0'
 repository 'https://github.com/DaemonAlex/dps-cityworker'
 
 ui_page 'web/index.html'
@@ -20,6 +20,7 @@ server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'bridge/server.lua',
     'sv_config.lua',
+    'sv_sites.lua',
     'sv_cityworker.lua',
     'sv_contractor.lua',
 }
