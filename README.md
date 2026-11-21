@@ -349,6 +349,17 @@ The Emergency table is not read by the code. The values are fixed in the server 
 
 ## Recent changes
 
+- **20 November 2026 (3.1.0).** Simple and solid, with every place captured in game.
+  - **Work sites are captured, not typed in.** An admin stands on the spot and runs `/cityspot <kind>` (pipe, pothole, meter, hydrant, manhole, drain, electrical, transformer, bridge, utility, emergency, depot, truck). They are kept in the `city_work_sites` table. `/cityspots` counts them, `/cityspotdel` removes the nearest. The old typed-in lists are gone. A shift needs at least two saved job spots.
+  - **Ten jobs:** water pipe, pothole, meter reading, hydrant, manhole check, storm drain, electrical box, transformer, bridge inspection, utility locating. The other eight (and traffic control) were removed.
+  - **The server decides who is on shift.** The game reads it from a player state, so a character switch, a script restart or a slow truck can no longer leave the two disagreeing. Restarting the script tells workers their shift ended.
+  - **One boss at the depot.** The company office is an option on him, not a second ped in the same spot. The depot can be moved in game with `/cityspot depot`.
+  - **Truck:** will not come out on top of a parked vehicle; keys go through the key script on the player's game; colour and plate are set by the server.
+  - **Site props** go out when the worker is near (so they sit on the ground), a missing prop model falls back to a cone, and a prop that fails never blocks the job. Three prop names that do not exist in the game were replaced.
+  - **Emergencies** happen only at a saved emergency spot inside the sector they are called for, only when a worker on shift has the rank for them, and only those workers get the alert.
+  - **Control Room** draws real data: every sector, workers on shift and their job, open damage reports. "Send" gives a worker a job in that sector. Reports can be closed. Staff can open it with `/controlroom`.
+  - `/setcityrank <id> <1-5>` for staff.
+  - Parts of this README below still describe 3.0.0 (job list, TrafficProps, sv_config lists).
 - **20 November 2026 (3.0.0).** The job was rebuilt so the server runs it.
   - **Job tickets.** Every job is a ticket the server keeps. You start the work at the site with your truck nearby, the work time has to pass, and the ticket is paid once. Asking for a new job no longer pays (the old free reroll is gone); a job you cannot reach can be swapped once every 10 minutes.
   - **Driving money.** A new job is always a drive away, and a job across the map pays more.

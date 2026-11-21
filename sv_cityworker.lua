@@ -24,8 +24,15 @@ end
 local function nearBoss(source, range)
     local ped = GetPlayerPed(source)
     if not ped or ped == 0 then return false end
-    local b = Config.BossCoords
+    local b = Sites.depot()
     return #(GetEntityCoords(ped) - vector3(b.x, b.y, b.z)) <= (range or 15.0)
+end
+
+--- On shift or not is decided here and nowhere else. The worker's game reads
+--- it from this state, so it can never disagree with the server.
+local function setShift(source, on)
+    local player = Player(source)
+    if player and player.state then player.state:set('dpsCityShift', on and true or nil, true) end
 end
 
 -- =====================================
@@ -207,8 +214,6 @@ CreateThread(function()
             end
         end
 
-        -- Broadcast updated health to all clients with Control Room open
-        TriggerClientEvent('dps-cityworker:client:UpdateSectorHealth', -1, SectorHealth)
     end
 end)
 
@@ -245,17 +250,27 @@ end
 -- WORK VEHICLE
 -- =====================================
 
+--- Keys are handed out by the key script on the worker's own game (that is
+--- how wasabi_carlock and the other key scripts work), so the server asks it to.
 local function giveKeys(source, plate, give)
-    if GetResourceState('wasabi_carlock') ~= 'started' then return end
-    pcall(function()
-        if give then exports.wasabi_carlock:GiveKey(source, plate) else exports.wasabi_carlock:RemoveKey(source, plate) end
-    end)
+    if not GetPlayerName(source) then return end
+    TriggerClientEvent('dps-cityworker:client:keys', source, plate, give and true or false)
+end
+
+--- True when another vehicle is parked where the truck comes out.
+local function bayBlocked(ignore)
+    local spawn = Sites.truck()
+    local at = vector3(spawn.x, spawn.y, spawn.z)
+    for _, veh in ipairs(GetAllVehicles()) do
+        if veh ~= ignore and DoesEntityExist(veh) and #(GetEntityCoords(veh) - at) < 5.0 then return true end
+    end
+    return false
 end
 
 --- Spawns the work truck at the depot. Returns the entity and its plate, or nil
 --- when the game never made it (the old code waited for ever).
 local function createWorkVehicle(source)
-    local spawn = Server.VehicleSpawn
+    local spawn = Sites.truck()
     local veh = CreateVehicle(Server.Vehicle, spawn.x, spawn.y, spawn.z, spawn.w, true, true)
 
     local waited = 0
@@ -267,6 +282,8 @@ local function createWorkVehicle(source)
 
     local plate = ('CITY%04d'):format(math.random(0, 9999))
     SetVehicleNumberPlateText(veh, plate)
+    SetVehicleColours(veh, 111, 111)
+    SetVehicleDirtLevel(veh, 1.0)
     giveKeys(source, plate, true)
 
     local ped = GetPlayerPed(source)
@@ -287,59 +304,81 @@ end
 -- =====================================
 
 -- Task types with different properties
+-- `checks` is the skill check the worker gets at the end of the work.
 local TaskTypes = {
-    -- Basic Tasks (Rank 1)
-    pipe = { label = 'Water Pipe Repair', xp = 20, repairAmount = 2.0, difficulty = 'easy', minRank = 1, category = 'maintenance' },
-    pothole = { label = 'Pothole Repair', xp = 15, repairAmount = 1.5, difficulty = 'easy', minRank = 1, category = 'road' },
+    -- Rank 1
+    pipe = { label = 'Water Pipe Repair', xp = 20, repairAmount = 2.0, difficulty = 'easy', minRank = 1, category = 'maintenance', checks = { 'easy', 'easy' } },
+    pothole = { label = 'Pothole Repair', xp = 15, repairAmount = 1.5, difficulty = 'easy', minRank = 1, category = 'road', checks = { 'easy' } },
     meter_reading = { label = 'Meter Reading', xp = 10, repairAmount = 0.5, difficulty = 'easy', minRank = 1, category = 'utility' },
-    graffiti = { label = 'Graffiti Removal', xp = 18, repairAmount = 1.0, difficulty = 'easy', minRank = 1, category = 'cleanup' },
-    trash = { label = 'Trash Collection', xp = 12, repairAmount = 0.5, difficulty = 'easy', minRank = 1, category = 'cleanup' },
 
-    -- Intermediate Tasks (Rank 2)
-    streetlight = { label = 'Streetlight Repair', xp = 25, repairAmount = 2.5, difficulty = 'medium', minRank = 2, category = 'electrical' },
-    hydrant = { label = 'Fire Hydrant Inspection', xp = 22, repairAmount = 1.5, difficulty = 'medium', minRank = 2, category = 'maintenance' },
-    sign_repair = { label = 'Road Sign Repair', xp = 20, repairAmount = 1.0, difficulty = 'medium', minRank = 2, category = 'road' },
-    manhole = { label = 'Manhole Inspection', xp = 28, repairAmount = 2.0, difficulty = 'medium', minRank = 2, category = 'sewer' },
+    -- Rank 2
+    hydrant = { label = 'Fire Hydrant Repair', xp = 22, repairAmount = 1.5, difficulty = 'medium', minRank = 2, category = 'maintenance' },
+    manhole = { label = 'Manhole Check', xp = 28, repairAmount = 2.0, difficulty = 'medium', minRank = 2, category = 'sewer' },
     storm_drain = { label = 'Storm Drain Clearing', xp = 25, repairAmount = 2.0, difficulty = 'medium', minRank = 2, category = 'sewer' },
 
-    -- Advanced Tasks (Rank 3)
-    electrical = { label = 'Electrical Box Repair', xp = 35, repairAmount = 3.0, difficulty = 'medium', minRank = 3, category = 'electrical' },
-    traffic_control = { label = 'Traffic Control Setup', xp = 30, repairAmount = 1.5, difficulty = 'medium', minRank = 3, category = 'road' },
-    tree_trimming = { label = 'Tree Trimming', xp = 35, repairAmount = 2.5, difficulty = 'medium', minRank = 3, category = 'maintenance' },
-    cable_install = { label = 'Cable Installation', xp = 40, repairAmount = 3.0, difficulty = 'medium', minRank = 3, category = 'utility' },
+    -- Rank 3
+    electrical = { label = 'Electrical Box Repair', xp = 35, repairAmount = 3.0, difficulty = 'medium', minRank = 3, category = 'electrical', checks = { 'medium', 'medium' } },
 
-    -- Expert Tasks (Rank 4)
-    transformer = { label = 'Transformer Maintenance', xp = 50, repairAmount = 5.0, difficulty = 'hard', minRank = 4, category = 'electrical' },
-    hazmat = { label = 'Hazmat Cleanup', xp = 60, repairAmount = 4.0, difficulty = 'hard', minRank = 4, category = 'cleanup' },
+    -- Rank 4
+    transformer = { label = 'Transformer Maintenance', xp = 50, repairAmount = 5.0, difficulty = 'hard', minRank = 4, category = 'electrical', checks = { 'medium', 'hard' } },
     bridge_inspection = { label = 'Bridge Inspection', xp = 55, repairAmount = 4.0, difficulty = 'hard', minRank = 4, category = 'maintenance' },
     utility_locating = { label = 'Utility Locating', xp = 45, repairAmount = 2.0, difficulty = 'hard', minRank = 4, category = 'utility' },
 
-    -- Emergency Tasks (Can be assigned to any rank during emergencies)
+    -- Emergencies (only happen at spots saved with /cityspot emergency)
     water_main = { label = 'Water Main Break', xp = 80, repairAmount = 8.0, difficulty = 'hard', minRank = 2, category = 'emergency', isEmergency = true },
     gas_leak = { label = 'Gas Leak Response', xp = 100, repairAmount = 10.0, difficulty = 'hard', minRank = 3, category = 'emergency', isEmergency = true },
     downed_lines = { label = 'Downed Power Lines', xp = 90, repairAmount = 9.0, difficulty = 'hard', minRank = 4, category = 'emergency', isEmergency = true },
     fallen_tree = { label = 'Fallen Tree Removal', xp = 70, repairAmount = 6.0, difficulty = 'medium', minRank = 2, category = 'emergency', isEmergency = true },
 }
 
-local function GetTaskForRank(rank, includeEmergency)
+--- The saved spots a job can be given at: { coords = where the work is done,
+--- entry = where the worker goes first (manholes only) }.
+--- A manhole job is two steps: the manhole on the street, then the repair
+--- spot down inside. A street manhole with no spot saved inside is not used.
+local function spotsFor(taskType)
+    if taskType ~= 'manhole' then return Sites.of(taskType) end
+    local street = {}
+    for _, site in ipairs(Sites.of('manhole')) do street[site.id] = site end
+    local list = {}
+    for _, inside in ipairs(Sites.of('manhole_inside')) do
+        local top = street[inside.parent]
+        if top then list[#list + 1] = { coords = inside.coords, entry = top.coords } end
+    end
+    return list
+end
+
+local function locationsFor(taskType)
+    local list = {}
+    for _, site in ipairs(spotsFor(taskType)) do list[#list + 1] = site.coords end
+    return list
+end
+
+--- The street entry that belongs to a work spot, if the job has one.
+local function entryFor(taskType, location)
+    for _, site in ipairs(spotsFor(taskType)) do
+        if site.entry and #(site.coords - location) < 0.5 then return site.entry end
+    end
+    return nil
+end
+
+--- How many job spots are saved in all (emergency spots not counted).
+local function workSiteCount()
+    local n = 0
+    for id, task in pairs(TaskTypes) do
+        if not task.isEmergency then n = n + #spotsFor(id) end
+    end
+    return n
+end
+
+--- The job types this rank can be given right now: only ones that have a saved spot.
+local function tasksForRank(rank)
     local available = {}
     for taskId, task in pairs(TaskTypes) do
-        -- Skip emergency tasks unless specifically requested
-        if not task.isEmergency or includeEmergency then
-            if rank >= task.minRank then
-                table.insert(available, taskId)
-            end
+        if not task.isEmergency and rank >= task.minRank and #spotsFor(taskId) > 0 then
+            available[#available + 1] = taskId
         end
     end
-
-    if #available == 0 then return 'pipe' end
-
-    -- Bad weather: the task that pays extra comes up half the time
-    if WeatherBonus and os.time() < WeatherBonus.untilTs and TaskTypes[WeatherBonus.type]
-        and rank >= TaskTypes[WeatherBonus.type].minRank and math.random(2) == 1 then
-        return WeatherBonus.type
-    end
-    return available[math.random(#available)]
+    return available
 end
 
 --- How long the work itself takes, in seconds. The client shows a bar this
@@ -354,33 +393,38 @@ end
 -- EMERGENCY EVENT SYSTEM
 -- =====================================
 
+--- A saved emergency spot that belongs to this sector and is not in use.
+--- No spot there means no emergency there: the place is never made up.
 local function GetEmergencyLocation(sectorId)
-    -- Pick from pre-defined emergency locations with verified Z coords
-    local emergencyLocs = Server.CategoryLocations and Server.CategoryLocations.emergency
-    if emergencyLocs and #emergencyLocs > 0 then
-        -- Shuffle and find an unused location
-        local candidates = {}
-        for i, loc in ipairs(emergencyLocs) do
-            if not UsedEmergencyLocations[i] then
-                table.insert(candidates, { index = i, coords = loc })
-            end
-        end
-        if #candidates > 0 then
-            local pick = candidates[math.random(#candidates)]
-            UsedEmergencyLocations[pick.index] = sectorId
-            return pick.coords, pick.index
+    local candidates = {}
+    for _, site in ipairs(Sites.of('emergency')) do
+        if not UsedEmergencyLocations[site.id] and GetSectorForCoords(site.coords) == sectorId then
+            candidates[#candidates + 1] = site
         end
     end
+    if #candidates == 0 then return nil end
+    local pick = candidates[math.random(#candidates)]
+    UsedEmergencyLocations[pick.id] = sectorId
+    return pick.coords, pick.id
+end
 
-    -- Fallback: pick from generic locations if emergency list is exhausted
-    local fallbackLocs = Server.Locations
-    if fallbackLocs and #fallbackLocs > 0 then
-        return fallbackLocs[math.random(#fallbackLocs)], nil
+--- Tell the workers who can deal with it. Nobody else gets the alert.
+local function alertWorkers(sectorId)
+    local em = ActiveEmergencies[sectorId]
+    local task = em and TaskTypes[em.type]
+    if not task then return end
+    for src, p in pairs(Players) do
+        if p.rank >= task.minRank then
+            TriggerClientEvent('dps-cityworker:client:EmergencyAlert', src, {
+                type = em.type,
+                label = task.label,
+                sector = sectorId,
+                sectorLabel = Config.Sectors[sectorId].label,
+                coords = em.coords,
+                xpBonus = task.xp,
+            })
+        end
     end
-
-    -- Last resort: use sector center
-    local sector = Config.Sectors[sectorId]
-    return sector and sector.coords or vec3(0, 0, 0), nil
 end
 
 local function TriggerEmergencyEvent(eventType, sectorId)
@@ -392,8 +436,8 @@ local function TriggerEmergencyEvent(eventType, sectorId)
     local task = TaskTypes[eventType]
     if not task or not task.isEmergency then return false end
 
-    -- Pick a pre-defined emergency location instead of random generation
     local emergencyCoords, locIndex = GetEmergencyLocation(sectorId)
+    if not emergencyCoords then return false end
 
     ActiveEmergencies[sectorId] = {
         type = eventType,
@@ -409,15 +453,7 @@ local function TriggerEmergencyEvent(eventType, sectorId)
     local floor = sector.blackoutThreshold + 5
     SetSectorHealth(sectorId, math.max(floor, SectorHealth[sectorId] - healthPenalty))
 
-    -- Alert all workers
-    TriggerClientEvent('dps-cityworker:client:EmergencyAlert', -1, {
-        type = eventType,
-        label = task.label,
-        sector = sectorId,
-        sectorLabel = sector.label,
-        coords = emergencyCoords,
-        xpBonus = task.xp,
-    })
+    alertWorkers(sectorId)
 
     print(('[dps-cityworker] ^1EMERGENCY: %s in %s!^0'):format(task.label, sector.label))
     return true
@@ -455,6 +491,18 @@ local function ResolveEmergency(sectorId, source)
     return true
 end
 
+--- From these emergency kinds, the ones a worker on shift has the rank for.
+--- An emergency nobody on shift may touch is not started.
+local function doableEmergencies(kinds)
+    local top = 0
+    for _, p in pairs(Players) do if p.rank > top then top = p.rank end end
+    local out = {}
+    for _, kind in ipairs(kinds) do
+        if TaskTypes[kind] and top >= TaskTypes[kind].minRank then out[#out + 1] = kind end
+    end
+    return out
+end
+
 -- Random emergency event spawner
 -- Only fires when workers are on duty — no point breaking things nobody can fix
 CreateThread(function()
@@ -475,10 +523,10 @@ CreateThread(function()
 
             if #sectors > 0 then
                 local randomSector = sectors[math.random(#sectors)]
-                local emergencyTypes = {'water_main', 'gas_leak', 'downed_lines', 'fallen_tree'}
-                local randomEmergency = emergencyTypes[math.random(#emergencyTypes)]
-
-                TriggerEmergencyEvent(randomEmergency, randomSector)
+                local emergencyTypes = doableEmergencies({'water_main', 'gas_leak', 'downed_lines', 'fallen_tree'})
+                if #emergencyTypes > 0 then
+                    TriggerEmergencyEvent(emergencyTypes[math.random(#emergencyTypes)], randomSector)
+                end
             end
         end
 
@@ -515,9 +563,9 @@ CreateThread(function()
         if weather and AnyWorkersOnDuty() and now - LastWeatherEvent >= (E.WeatherCooldown or 900) then
             if STORM[weather] and math.random(100) <= 40 then
                 local sectors = freeSectors()
-                if #sectors > 0 then
-                    local kinds = { 'fallen_tree', 'downed_lines' }
-                    TriggerEmergencyEvent(kinds[math.random(#kinds)], sectors[math.random(#sectors)])
+                local kinds = doableEmergencies({ 'fallen_tree', 'downed_lines' })
+                if #sectors > 0 and #kinds > 0
+                    and TriggerEmergencyEvent(kinds[math.random(#kinds)], sectors[math.random(#sectors)]) then
                     LastWeatherEvent = now
                 end
             elseif (RAIN[weather] or STORM[weather]) and math.random(100) <= 30 then
@@ -534,13 +582,6 @@ CreateThread(function()
         end
     end
 end)
-
-local function locationsFor(taskType)
-    local task = TaskTypes[taskType]
-    local list = task and task.category and Server.CategoryLocations and Server.CategoryLocations[task.category]
-    if list and #list > 0 then return list end
-    return Server.Locations
-end
 
 --- The sector in the worst shape, when one is below the "needs work" line.
 local function neediestSector()
@@ -584,12 +625,15 @@ local function taskView(job)
     return {
         id = job.id,
         location = job.location,
+        entry = job.entry,
+        entered = job.entered or false,
         taskType = job.type,
         type = job.type,
         label = task.label,
         category = task.category,
         difficulty = task.difficulty,
         seconds = TaskSeconds(job.type),
+        checks = task.checks or Config.SkillCheck.Difficulty,
         assignedBy = job.assignedBy,
     }
 end
@@ -601,13 +645,29 @@ local function issueTask(source, forcedType)
     local p = Players[source]
     if not p then return nil end
     local ped = GetPlayerPed(source)
-    local from = (ped and ped ~= 0) and GetEntityCoords(ped) or vector3(Config.BossCoords.x, Config.BossCoords.y, Config.BossCoords.z)
+    local from = (ped and ped ~= 0) and GetEntityCoords(ped) or Sites.depot().xyz
 
-    local taskType = forcedType or GetTaskForRank(p.rank)
-    local location = pickLocation(taskType, from, p.lastLocation)
+    -- Try the job types in a mixed-up order until one has a spot to go to.
+    -- Bad weather: the job that pays extra is tried first half the time.
+    local order = forcedType and { forcedType } or tasksForRank(p.rank)
+    for i = #order, 2, -1 do
+        local j = math.random(i)
+        order[i], order[j] = order[j], order[i]
+    end
+    if not forcedType and WeatherBonus and os.time() < WeatherBonus.untilTs and math.random(2) == 1 then
+        for i, id in ipairs(order) do
+            if id == WeatherBonus.type then order[1], order[i] = order[i], order[1] break end
+        end
+    end
+
+    local taskType, location
+    for _, id in ipairs(order) do
+        local at = pickLocation(id, from, p.lastLocation)
+        if at then taskType, location = id, at break end
+    end
     if not location then
-        taskType = 'pipe'
-        location = pickLocation(taskType, from, p.lastLocation) or Server.Locations[math.random(#Server.Locations)]
+        p.task, p.taskType, p.location = nil, nil, nil
+        return nil
     end
 
     p.taskSeq = (p.taskSeq or 0) + 1
@@ -615,6 +675,7 @@ local function issueTask(source, forcedType)
         id = p.taskSeq,
         type = taskType,
         location = location,
+        entry = entryFor(taskType, location),   -- manholes: the street manhole to go down first
         from = from,
         issuedAt = os.time(),
         startedAt = nil,
@@ -651,17 +712,32 @@ end
 -- CALLBACKS
 -- =====================================
 
+--- Start of shift. Answers with a table:
+---   { ok = true, netid = truck, task = first job }
+---   { ok = true, resume = true, task = current job }   already on shift
+---   { ok = false, msg = why }
 lib.callback.register('dps-cityworker:server:spawnVehicle', function(source)
-    if Players[source] or Starting[source] then return false end
+    if Starting[source] then return { ok = false } end
+    local running = Players[source]
+    if running then
+        -- The worker's game lost track of the shift. Hand it back, do not lock them out.
+        setShift(source, true)
+        return { ok = true, resume = true, task = running.task and taskView(running.task) or nil }
+    end
     -- Shifts start at the depot, next to the boss. Not from anywhere on the map.
-    if not nearBoss(source, 15.0) then return false, 'Go to the depot to start work' end
-    if not Bridge.GetIdentifier(source) then return false end
+    if not nearBoss(source, 15.0) then return { ok = false, msg = 'Go to the depot to start work' } end
+    if not Bridge.GetIdentifier(source) then return { ok = false } end
+    if workSiteCount() < 2 then
+        return { ok = false, msg = 'The city has no work sites set up yet' }
+    end
+    if bayBlocked() then return { ok = false, msg = 'A vehicle is in the way where the truck comes out. Move it first.' } end
 
     Starting[source] = true
     local ok, netid, taskData = pcall(function()
+        local stats = GetPlayerStats(source)
+        if #tasksForRank(stats.rank) == 0 then return false end
         local veh, plate = createWorkVehicle(source)
         if not veh then return nil end
-        local stats = GetPlayerStats(source)
         if not GetPlayerName(source) then      -- left while the truck was spawning
             if DoesEntityExist(veh) then DeleteEntity(veh) end
             return nil
@@ -674,18 +750,20 @@ lib.callback.register('dps-cityworker:server:spawnVehicle', function(source)
             total_repairs = stats.total_repairs or 0,
             total_earnings = stats.total_earnings or 0,
         }
+        setShift(source, true)
         local view = issueTask(source)
-        view.rank = stats.rank
+        if view then view.rank = stats.rank end
         return NetworkGetNetworkIdFromEntity(veh), view
     end)
     Starting[source] = nil
 
     if not ok then
         print(('[dps-cityworker] ^1start of shift failed for %s: %s^0'):format(source, tostring(netid)))
-        return false
+        return { ok = false }
     end
-    if not netid then return false, 'The depot could not bring a truck out. Try again.' end
-    return netid, taskData
+    if netid == false then return { ok = false, msg = 'There is no work for your rank yet' } end
+    if not netid then return { ok = false, msg = 'The depot could not bring a truck out. Try again.' } end
+    return { ok = true, netid = netid, task = taskData }
 end)
 
 --- A wrecked or lost truck is replaced at the depot.
@@ -693,6 +771,7 @@ lib.callback.register('dps-cityworker:server:newTruck', function(source)
     local p = Players[source]
     if not p or Starting[source] then return false, 'You are not on shift' end
     if not nearBoss(source, 15.0) then return false, 'Go to the depot for a new truck' end
+    if bayBlocked(p.entity) then return false, 'A vehicle is in the way where the truck comes out. Move it first.' end
     if onCooldown(source, 'newTruck', T.truckCooldown or 120) then return false, 'The depot needs a few minutes to get another truck ready' end
 
     Starting[source] = true
@@ -711,9 +790,10 @@ end)
 local function endShift(source)
     local p = Players[source]
     if not p then return false end
-    SavePlayerStats(source, p)
+    pcall(SavePlayerStats, source, p)
     removeWorkVehicle(source)
     Players[source] = nil
+    if GetPlayerName(source) then setShift(source, false) end
     return true
 end
 
@@ -721,6 +801,15 @@ lib.callback.register('dps-cityworker:server:clockOut', function(source)
     if not nearBoss(source, 20.0) then return false end
     return endShift(source)
 end)
+
+--- Switching character ends the shift: the truck goes, the stats are saved
+--- for the character that earned them.
+local function onLogout(src)
+    src = tonumber(src) or source
+    if src and endShift(src) then Cooldowns[src] = nil end
+end
+AddEventHandler('QBCore:Server:OnPlayerUnload', onLogout)
+AddEventHandler('esx:playerLogout', onLogout)
 
 -- Cleanup when player drops
 AddEventHandler('playerDropped', function()
@@ -730,12 +819,23 @@ AddEventHandler('playerDropped', function()
     Cooldowns[source] = nil
 end)
 
--- Stopping the script takes every work truck with it and saves every worker
+-- Stopping the script takes every work truck with it, saves every worker,
+-- and tells them their shift is over instead of leaving them guessing.
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     for source, p in pairs(Players) do
         pcall(SavePlayerStats, source, p)
         if p.entity and DoesEntityExist(p.entity) then DeleteEntity(p.entity) end
+        pcall(setShift, source, false)
+        pcall(Bridge.Notify, source, 'The city depot is restarting. Your shift has ended and your work is saved. Clock in again at the depot.', 'inform')
+    end
+end)
+
+-- A shift never outlives the script: clear any state left from before a crash.
+CreateThread(function()
+    for _, id in ipairs(GetPlayers()) do
+        local src = tonumber(id)
+        if src and Player(src).state.dpsCityShift then setShift(src, false) end
     end
 end)
 
@@ -746,10 +846,11 @@ lib.callback.register('dps-cityworker:server:BeginTask', function(source, taskId
     local job = p and p.task
     if not job or job.id ~= taskId then return false, 'That is not your current job' end
 
+    if job.entry and not job.entered then return false, 'Go down through the manhole first' end
     local pos = GetEntityCoords(GetPlayerPed(source))
     if #(pos - job.location) > (Config.TaskCompleteDistance or 12.0) then return false, 'You are not at the work site' end
 
-    if (T.truckDistance or 80.0) > 0 then
+    if (T.truckDistance or 80.0) > 0 and not (T.noTruck and T.noTruck[job.type]) then
         if not p.entity or not DoesEntityExist(p.entity) then
             return false, 'Your work truck is gone. Get a new one at the depot.'
         end
@@ -760,6 +861,19 @@ lib.callback.register('dps-cityworker:server:BeginTask', function(source, taskId
 
     job.startedAt = os.time()
     return true, TaskSeconds(job.type)
+end)
+
+--- Step one of a manhole job: the worker is at the manhole on the street.
+--- The server checks it, and only then is the repair spot inside open to them.
+lib.callback.register('dps-cityworker:server:ReachedEntry', function(source, taskId)
+    local p = Players[source]
+    local job = p and p.task
+    if not job or job.id ~= taskId or not job.entry then return false end
+    if job.entered then return true end
+    local pos = GetEntityCoords(GetPlayerPed(source))
+    if #(pos - job.entry) > (T.entryDistance or 15.0) then return false end
+    job.entered = true
+    return true
 end)
 
 lib.callback.register('dps-cityworker:server:Payment', function(source, taskId)
@@ -784,6 +898,7 @@ lib.callback.register('dps-cityworker:server:Payment', function(source, taskId)
     -- 1. Calculate Pay based on Rank + Teamwork Bonus
     local rankData = Config.Ranks[playerData.rank] or Config.Ranks[1]
     local teamworkBonus = CalculateTeamworkBonus(source)
+    local teamworkPercent = math.floor((teamworkBonus - 1.0) * 100 + 0.5)
     local payment = Config.Economy.BasePay * rankData.payMultiplier * teamworkBonus
     if WeatherBonus and WeatherBonus.type == taskType and os.time() < WeatherBonus.untilTs then
         payment = payment * 1.25
@@ -866,6 +981,7 @@ lib.callback.register('dps-cityworker:server:Payment', function(source, taskId)
         rank = playerData.rank,
         rankUp = rankUp,
         travelPay = travelPay,
+        teamwork = teamworkPercent,
         sectorId = sectorId,
         sectorLabel = sectorId and Config.Sectors[sectorId].label or nil,
         sectorHealth = newHealth,
@@ -884,14 +1000,28 @@ lib.callback.register('dps-cityworker:server:SkipTask', function(source)
         return false, ('You can swap a job once every %d minutes'):format(math.ceil(wait / 60))
     end
     if p.task then p.lastLocation = p.task.location end
-    return true, issueTask(source)
+    local view = issueTask(source)
+    if not view then return false, 'There is no other work site for you right now' end
+    return true, view
 end)
 
---- The job a worker is on, for a game that lost it (a restart of the script on
---- their side, a crash and rejoin while still on shift).
-lib.callback.register('dps-cityworker:server:CurrentTask', function(source)
+--- Is this player on shift, and on which job. Asked by a game that just
+--- started this script (a restart on their side, a crash and rejoin).
+lib.callback.register('dps-cityworker:server:ShiftState', function(source)
     local p = Players[source]
-    return p and p.task and taskView(p.task) or nil
+    if not p then return false end
+    return true, p.task and taskView(p.task) or nil
+end)
+
+--- No job right now (every spot was just used): ask for one.
+lib.callback.register('dps-cityworker:server:RequestTask', function(source)
+    local p = Players[source]
+    if not p then return false, 'You are not on shift' end
+    if p.task then return true, taskView(p.task) end
+    if onCooldown(source, 'request', 10) then return false, 'Give it a few seconds' end
+    local view = issueTask(source)
+    if not view then return false, 'There is no work site for you right now' end
+    return true, view
 end)
 
 lib.callback.register('dps-cityworker:server:GetSectorHealth', function(source)
@@ -923,47 +1053,130 @@ end)
 -- CONTROL ROOM (FOREMAN ONLY)
 -- =====================================
 
-lib.callback.register('dps-cityworker:server:OpenControlRoom', function(source)
-    if not Players[source] then return false, nil end
+--- Staff can open the Control Room without being a Foreman.
+local function isStaff(source)
+    return IsPlayerAceAllowed(source, 'command.setsectorhealth')
+end
 
-    local rank = Players[source].rank
-    if rank < 5 then
-        Bridge.Notify(source, 'Only Foremen can access the Control Room', 'error')
-        return false, nil
+local function canControl(source)
+    local p = Players[source]
+    return (p and p.rank >= 5) or isStaff(source)
+end
+
+--- Everything the Control Room screen shows. All of it is read here, live.
+local function controlData()
+    local sectors = {}
+    for id, cfg in pairs(Config.Sectors) do
+        local em = ActiveEmergencies[id]
+        local sites = 0
+        for taskId, task in pairs(TaskTypes) do
+            if not task.isEmergency then
+                for _, site in ipairs(spotsFor(taskId)) do
+                    if GetSectorForCoords(site.coords) == id then sites = sites + 1 end
+                end
+            end
+        end
+        sectors[#sectors + 1] = {
+            id = id,
+            label = cfg.label,
+            health = SectorHealth[id] or 100.0,
+            dark = Blackouts[id] == true,
+            emergency = em and TaskTypes[em.type] and TaskTypes[em.type].label or nil,
+            emergencyMinutes = em and math.floor((os.time() - em.startTime) / 60) or nil,
+            sites = sites,
+        }
     end
+    table.sort(sectors, function(a, b) return a.label < b.label end)
 
-    local data = {}
-    for id, health in pairs(SectorHealth) do
-        data[id] = {
-            health = health,
-            label = Config.Sectors[id] and Config.Sectors[id].label or id,
+    local workers = {}
+    for src, p in pairs(Players) do
+        local sectorId = p.task and GetSectorForCoords(p.task.location)
+        workers[#workers + 1] = {
+            id = src,
+            name = Bridge.GetCharacterName(src) or ('Worker ' .. src),
+            rank = Config.Ranks[p.rank] and Config.Ranks[p.rank].label or tostring(p.rank),
+            job = p.task and TaskTypes[p.task.type] and TaskTypes[p.task.type].label or nil,
+            working = p.task and p.task.startedAt ~= nil or false,
+            sector = sectorId and Config.Sectors[sectorId].label or nil,
+        }
+    end
+    table.sort(workers, function(a, b) return a.name < b.name end)
+
+    local reports = {}
+    local ok, rows = pcall(MySQL.query.await, [[
+        SELECT id, sector_id, damage_type, TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age
+        FROM city_damage_reports WHERE repaired = 0 ORDER BY id DESC LIMIT 30
+    ]])
+    for _, row in ipairs(ok and rows or {}) do
+        reports[#reports + 1] = {
+            id = row.id,
+            sector = Config.Sectors[row.sector_id] and Config.Sectors[row.sector_id].label or row.sector_id,
+            type = row.damage_type,
+            age = row.age or 0,
         }
     end
 
-    return true, data
+    return { sectors = sectors, workers = workers, reports = reports }
+end
+
+lib.callback.register('dps-cityworker:server:OpenControlRoom', function(source)
+    if not canControl(source) then
+        Bridge.Notify(source, 'Only Foremen can access the Control Room', 'error')
+        return false, nil
+    end
+    return true, controlData()
 end)
 
-lib.callback.register('dps-cityworker:server:DispatchCrew', function(source, sectorId)
-    if not Players[source] or Players[source].rank < 5 then
-        return false, 'Insufficient rank'
+--- Send one worker to a sector: they get a job at a saved spot in that sector.
+lib.callback.register('dps-cityworker:server:DispatchWorker', function(source, targetId, sectorId)
+    if not canControl(source) then return false, 'Only Foremen can dispatch' end
+    targetId = tonumber(targetId)
+    local target = targetId and Players[targetId]
+    if not target then return false, 'That worker is not on shift' end
+    if not Config.Sectors[sectorId] then return false, 'Invalid sector' end
+    if target.task and target.task.startedAt then return false, 'That worker is in the middle of a job' end
+
+    -- Jobs this worker has the rank for, that have a spot in the sector
+    local options = {}
+    for _, taskId in ipairs(tasksForRank(target.rank)) do
+        for _, site in ipairs(spotsFor(taskId)) do
+            if GetSectorForCoords(site.coords) == sectorId
+                and not (target.task and #(site.coords - target.task.location) < 5.0) then
+                options[#options + 1] = { type = taskId, coords = site.coords, entry = site.entry }
+            end
+        end
+    end
+    if #options == 0 then return false, 'No work site for that worker in ' .. Config.Sectors[sectorId].label end
+    if onCooldown(source, 'assign:' .. targetId, 300) then
+        return false, 'You sent that worker somewhere a few minutes ago'
     end
 
-    if not Config.Sectors[sectorId] then
-        return false, 'Invalid sector'
-    end
+    local pick = options[math.random(#options)]
+    local ped = GetPlayerPed(targetId)
+    target.taskSeq = (target.taskSeq or 0) + 1
+    target.task = {
+        id = target.taskSeq,
+        type = pick.type,
+        location = pick.coords,
+        entry = pick.entry,
+        from = (ped and ped ~= 0) and GetEntityCoords(ped) or pick.coords,
+        issuedAt = os.time(),
+        assignedBy = Bridge.GetCharacterName(source),
+    }
+    target.taskType, target.location = pick.type, pick.coords
+    TriggerClientEvent('dps-cityworker:client:TaskAssigned', targetId, taskView(target.task))
+    return true, ('Sent to %s: %s'):format(Config.Sectors[sectorId].label, TaskTypes[pick.type].label)
+end)
 
-    if onCooldown(source, 'dispatch', 60) then return false, 'Wait a minute between dispatches' end
-
-    -- Only workers on shift hear it
-    for worker in pairs(Players) do
-        TriggerClientEvent('dps-cityworker:client:DispatchAlert', worker, {
-            sector = sectorId,
-            label = Config.Sectors[sectorId].label,
-            coords = Config.Sectors[sectorId].coords,
-        })
-    end
-
-    return true, 'Dispatch sent'
+--- A damage report has been dealt with: it leaves the list.
+lib.callback.register('dps-cityworker:server:CloseReport', function(source, reportId)
+    if not canControl(source) then return false end
+    reportId = tonumber(reportId)
+    if not reportId then return false end
+    local changed = MySQL.update.await(
+        'UPDATE city_damage_reports SET repaired = 1, repaired_by = ?, repaired_at = NOW() WHERE id = ? AND repaired = 0',
+        { Bridge.GetIdentifier(source), reportId })
+    return (changed or 0) > 0
 end)
 
 -- =====================================
@@ -1018,9 +1231,34 @@ lib.addCommand('setsectorhealth', {
     end
 
     SetSectorHealth(sector, health)
-    TriggerClientEvent('dps-cityworker:client:UpdateSectorHealth', -1, SectorHealth)
 
     Bridge.Notify(source, ('Set %s health to %d%%'):format(Config.Sectors[sector].label, health), 'success')
+end)
+
+lib.addCommand('setcityrank', {
+    help = 'Set a player\'s city worker rank, 1 to 5 (Admin)',
+    params = {
+        { name = 'target', type = 'playerId', help = 'Player id' },
+        { name = 'rank', type = 'number', help = 'Rank 1-5' },
+    },
+    restricted = 'group.admin',
+}, function(source, args)
+    local rank = math.floor(tonumber(args.rank) or 0)
+    if not Config.Ranks[rank] then return Bridge.Notify(source, 'Rank is 1 to 5', 'error') end
+    local target = args.target
+    if not Bridge.GetIdentifier(target) then return Bridge.Notify(source, 'That player has no character loaded', 'error') end
+
+    local p = Players[target]
+    if p then
+        p.rank, p.xp = rank, (rank - 1) * 1000
+        SavePlayerStats(target, p)
+    else
+        local stats = GetPlayerStats(target)
+        stats.rank, stats.xp = rank, (rank - 1) * 1000
+        SavePlayerStats(target, stats)
+    end
+    Bridge.Notify(source, ('City worker rank set to %s'):format(Config.Ranks[rank].label), 'success')
+    if target ~= source then Bridge.Notify(target, ('Your city worker rank is now %s'):format(Config.Ranks[rank].label), 'inform') end
 end)
 
 lib.addCommand('workstatus', {
@@ -1093,15 +1331,17 @@ end)
 
 lib.callback.register('dps-cityworker:server:GetActiveEmergencies', function(source)
     local emergencies = {}
+    local p = Players[source]
+    if not p then return emergencies end
     for sectorId, emergency in pairs(ActiveEmergencies) do
         local task = TaskTypes[emergency.type]
-        emergencies[sectorId] = {
+        if task and p.rank >= task.minRank then emergencies[sectorId] = {
             type = emergency.type,
             label = task and task.label or emergency.type,
             coords = emergency.coords,
             startTime = emergency.startTime,
             sectorLabel = Config.Sectors[sectorId] and Config.Sectors[sectorId].label or sectorId,
-        }
+        } end
     end
     return emergencies
 end)
@@ -1177,35 +1417,6 @@ lib.callback.register('dps-cityworker:server:GetActiveWorkers', function(source)
     return workers
 end)
 
-lib.callback.register('dps-cityworker:server:GetNearbyWorkers', function(source, radius)
-    radius = radius or 50.0
-    local sourcePed = GetPlayerPed(source)
-    if not sourcePed then return {} end
-
-    local sourceCoords = GetEntityCoords(sourcePed)
-    local nearby = {}
-
-    for playerId, data in pairs(Players) do
-        if playerId ~= source then
-            local ped = GetPlayerPed(playerId)
-            if ped and DoesEntityExist(ped) then
-                local coords = GetEntityCoords(ped)
-                local dist = #(sourceCoords - coords)
-                if dist <= radius then
-                    table.insert(nearby, {
-                        id = playerId,
-                        name = Bridge.GetCharacterName(playerId),
-                        rank = data.rank,
-                        distance = dist,
-                    })
-                end
-            end
-        end
-    end
-
-    return nearby
-end)
-
 -- Foreman crew management
 --- The jobs a foreman can hand out, for the menu.
 lib.callback.register('dps-cityworker:server:TaskList', function(source)
@@ -1244,7 +1455,14 @@ lib.callback.register('dps-cityworker:server:AssignWorkerTask', function(source,
 
     local target = Players[targetId]
     if target.task then target.lastLocation = target.task.location end
+    if #spotsFor(taskType) == 0 then return false, 'No site is set up for that job' end
+    local old = target.task
     local view = issueTask(targetId, taskType)
+    if not view then
+        target.task = old
+        if old then target.taskType, target.location = old.type, old.location end
+        return false, 'No free site for that job right now'
+    end
     target.task.assignedBy = Bridge.GetCharacterName(source)
     view.assignedBy = target.task.assignedBy
 

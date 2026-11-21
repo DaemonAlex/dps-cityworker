@@ -1,25 +1,15 @@
 local Config = lib.require('config')
 local isHired, activeJob = false, false
 local cityBoss, startZone, currZone, currentCone
+local sitePoint = nil        -- the point that puts the site prop out when the worker is near
+local entryPoint = nil       -- manhole jobs: the point at the manhole on the street
 local JobBlip = nil
+local CITY_BLIP = nil
+local Depot = nil            -- vec4: where the boss stands. Sent by the server.
 local CurrentTask = nil
 local ControlRoomOpen = false
 local Working = false        -- true while a repair is being done, so it cannot be started twice
-local TrafficBegun = nil     -- id of the traffic control job the server has been told about
-
--- =====================================
--- BLIP SETUP
--- =====================================
-
-local CITY_BLIP = AddBlipForCoord(Config.BossCoords.x, Config.BossCoords.y, Config.BossCoords.z)
-SetBlipSprite(CITY_BLIP, 566)
-SetBlipDisplay(CITY_BLIP, 4)
-SetBlipScale(CITY_BLIP, 0.8)
-SetBlipAsShortRange(CITY_BLIP, true)
-SetBlipColour(CITY_BLIP, 5)
-BeginTextCommandSetBlipName("STRING")
-AddTextComponentSubstringPlayerName("City Worker Job")
-EndTextCommandSetBlipName(CITY_BLIP)
+local clockingOut = false
 
 -- =====================================
 -- TARGET HELPERS
@@ -98,33 +88,35 @@ local function cleanupJob()
     -- Stop any active particle effects
     if StopAllParticles then StopAllParticles() end
 
+    if sitePoint then
+        sitePoint:remove()
+        sitePoint = nil
+    end
+    if entryPoint then
+        entryPoint:remove()
+        entryPoint = nil
+    end
+    if CurrentTask and CurrentTask.entry then lib.hideTextUI() end
     if currZone then
         RemoveTargetZone(currZone)
         currZone = nil
     end
-    if DoesEntityExist(currentCone) then
-        DeleteEntity(currentCone)
-        currentCone = nil
-    end
+    if currentCone and DoesEntityExist(currentCone) then DeleteEntity(currentCone) end
+    currentCone = nil
     if JobBlip then
         RemoveBlip(JobBlip)
         JobBlip = nil
     end
     CurrentTask = nil
+    activeJob = false
 end
 
-local function resetJob()
+--- The shift is over on this game: the job, its markers and the emergency
+--- markers all go. Whether a shift is running is decided by the server.
+local function leaveShift()
     cleanupJob()
     isHired = false
-    activeJob = false
-
-    if DoesEntityExist(cityBoss) then
-        RemoveTargetEntity(cityBoss, {'Start Work', 'Replace Work Truck', 'Job Menu', 'Finish Work'})
-        DeleteEntity(cityBoss)
-        cityBoss = nil
-    end
-    -- Note: Don't remove startZone here - it's created once at script load
-    -- and should persist through character switches
+    if ClearEmergencies then ClearEmergencies() end
 end
 
 -- =====================================
@@ -132,10 +124,9 @@ end
 -- =====================================
 
 local function GetTaskProp(taskType)
-    if Config.TaskProps and Config.TaskProps[taskType] then
-        return Config.TaskProps[taskType]
-    end
-    return 'prop_roadcone02a' -- Default fallback
+    local prop = Config.TaskProps and Config.TaskProps[taskType]
+    if prop == false then return nil end   -- no marker for this job
+    return prop or 'prop_roadcone02a'
 end
 
 local function GetTaskAnimation(category)
@@ -145,23 +136,34 @@ local function GetTaskAnimation(category)
     return { dict = 'amb@world_human_welding@male@base', anim = 'base' }
 end
 
-local function SpawnTaskProp(taskType, coords)
-    local propModel = GetTaskProp(taskType)
-    lib.requestModel(propModel)
-
-    local prop = CreateObject(propModel, coords.x, coords.y, coords.z - 1.0, false, false, false)
-    PlaceObjectOnGroundProperly(prop)
-    FreezeEntityPosition(prop, true)
-
-    return prop
+--- A model that is sure to exist: the one asked for, else a road cone.
+local function safeModel(model)
+    local hash = type(model) == 'string' and joaat(model) or model
+    if hash and IsModelInCdimage(hash) and IsModelValid(hash) then return hash end
+    return `prop_roadcone02a`
 end
 
--- Task duration based on difficulty
-local TaskDurations = {
-    easy = 6000,
-    medium = 8000,
-    hard = 12000,
-}
+--- Puts a marker prop on the ground at a spot. Only called when the player is
+--- near, so the ground is loaded. Returns nil if the game will not make it:
+--- the job still works without the prop.
+function SpawnTaskProp(taskType, coords)
+    local wanted = GetTaskProp(taskType)
+    if not wanted then return nil end
+    local model = safeModel(wanted)
+    local ok = pcall(lib.requestModel, model, 5000)
+    if not ok then return nil end
+
+    local z = coords.z - 1.0
+    local found, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z + 0.5, false)
+    if found then z = groundZ end
+
+    local prop = CreateObject(model, coords.x, coords.y, z, false, false, false)
+    SetModelAsNoLongerNeeded(model)
+    if not prop or prop == 0 then return nil end
+    PlaceObjectOnGroundProperly(prop)
+    FreezeEntityPosition(prop, true)
+    return prop
+end
 
 -- =====================================
 -- PARTICLE EFFECTS SYSTEM
@@ -219,12 +221,6 @@ local TaskParticles = {
         scale = 0.8,
         offset = vec3(0, 0, -0.5),
     },
-    hazmat = {
-        dict = 'core',
-        name = 'exp_grd_grenade_smoke',
-        scale = 1.5,
-        offset = vec3(0, 0, 0.3),
-    },
 }
 
 local function StartTaskParticles(taskType, coords)
@@ -233,8 +229,11 @@ local function StartTaskParticles(taskType, coords)
 
     -- Request particle asset
     RequestNamedPtfxAsset(particleData.dict)
+    local waited = 0
     while not HasNamedPtfxAssetLoaded(particleData.dict) do
         Wait(10)
+        waited = waited + 10
+        if waited > 3000 then return nil end
     end
 
     UseParticleFxAsset(particleData.dict)
@@ -271,217 +270,207 @@ StopAllParticles = function()
 end
 
 -- =====================================
--- SKILL CHECKS
--- =====================================
-
-local function GetDifficultyForTask(taskType)
-    local difficulties = {
-        pipe = { 'easy', 'easy' },
-        pothole = { 'easy' },
-        streetlight = { 'easy', 'medium' },
-        electrical = { 'medium', 'medium' },
-        transformer = { 'medium', 'hard' },
-        hazmat = { 'hard', 'hard' },
-    }
-    return difficulties[taskType] or Config.SkillCheck.Difficulty
-end
-
-local function DoTaskSkillCheck(taskType)
-    local difficulty = GetDifficultyForTask(taskType)
-
-    local success = lib.skillCheck(difficulty, Config.SkillCheck.Input)
-
-    return success
-end
-
--- =====================================
 -- NEXT TASK
 -- =====================================
 
+local function setJobBlip(at, text, route)
+    if JobBlip then RemoveBlip(JobBlip) end
+    JobBlip = AddBlipForCoord(at.x, at.y, at.z)
+    SetBlipSprite(JobBlip, 566)
+    SetBlipColour(JobBlip, 5)
+    if route then
+        SetBlipRoute(JobBlip, true)
+        SetBlipRouteColour(JobBlip, 5)
+    end
+    BeginTextCommandSetBlipName("STRING")
+    AddTextComponentSubstringPlayerName(text)
+    EndTextCommandSetBlipName(JobBlip)
+end
+
+--- Guide to a work spot the GPS cannot route to (down in the tunnels): the
+--- distance on screen, and an arrow over the spot once it is close.
+local function startGuide(data, at)
+    CreateThread(function()
+        local lastText, shown = 0, false
+        while CurrentTask == data do
+            local pos = GetEntityCoords(cache.ped)
+            local dist = #(pos - at)
+            local now = GetGameTimer()
+            if now - lastText > 500 then
+                lastText = now
+                local dz = at.z - pos.z
+                local hint = (dz > 3.0 and ' (above you)') or (dz < -3.0 and ' (below you)') or ''
+                lib.showTextUI(('Repair spot: %d m%s'):format(math.floor(dist), hint), { position = 'top-center' })
+                shown = true
+            end
+            if dist < 80.0 then
+                DrawMarker(2, at.x, at.y, at.z + 1.2, 0.0, 0.0, 0.0, 180.0, 0.0, 0.0, 0.5, 0.5, 0.5, 255, 122, 69, 220, true, true, 2, false, nil, nil, false)
+                Wait(0)
+            else
+                Wait(500)
+            end
+        end
+        if shown and not (CurrentTask and CurrentTask.entry and CurrentTask.entered) then lib.hideTextUI() end
+    end)
+end
+
+--- The work spot itself: blip, the place to press, the prop when near.
+--- `guided` is for a spot down a manhole: no GPS route, a guide instead.
+local function openSite(data, guided)
+    local at = vec3(data.location.x, data.location.y, data.location.z)
+    local taskType = data.taskType or 'pipe'
+
+    setJobBlip(at, (guided and 'Repair spot: ' or 'Task: ') .. (data.label or taskType), not guided)
+
+    -- The spot to work at. Made first, so the job works even if the prop does not.
+    currZone = AddTargetZone('cityworker_task_' .. tostring(data.id), {
+        coords = at,
+        radius = 2.0,
+    }, {
+        {
+            icon = 'fas fa-wrench',
+            label = data.label or 'Repair',
+            action = function()
+                DoRepairTask()
+            end,
+            canInteract = function()
+                return activeJob and isHired
+            end,
+        }
+    })
+
+    -- The prop and the effects go out when the worker gets near (the ground is
+    -- loaded then) and come back in when they leave.
+    local point = lib.points.new({ coords = at, distance = 60 })
+    function point:onEnter()
+        if sitePoint ~= self then return end
+        if currentCone and DoesEntityExist(currentCone) then DeleteEntity(currentCone) end
+        currentCone = SpawnTaskProp(taskType, at)
+        pcall(StartTaskParticles, taskType, at)
+    end
+    function point:onExit()
+        if sitePoint ~= self then return end
+        if currentCone and DoesEntityExist(currentCone) then DeleteEntity(currentCone) end
+        currentCone = nil
+        StopAllParticles()
+    end
+    sitePoint = point
+
+    if guided then startGuide(data, at) end
+end
+
 function NextDelivery(data)
     if not data or not data.location then
-        Bridge.Notify('No tasks available', 'error')
+        Bridge.Notify('No work site is free right now. Ask again from the job menu (/citywork).', 'inform')
         return
     end
 
+    cleanupJob()
     activeJob = true
     CurrentTask = data
 
-    -- Create blip for task location
-    if JobBlip then RemoveBlip(JobBlip) end
-    JobBlip = AddBlipForCoord(data.location.x, data.location.y, data.location.z)
-    SetBlipSprite(JobBlip, 566)
-    SetBlipColour(JobBlip, 5)
-    SetBlipRoute(JobBlip, true)
-    SetBlipRouteColour(JobBlip, 5)
-    BeginTextCommandSetBlipName("STRING")
-    AddTextComponentSubstringPlayerName(data.taskType and ('Task: ' .. (data.label or data.taskType)) or 'Work Site')
-    EndTextCommandSetBlipName(JobBlip)
+    -- A manhole job is two steps: the manhole on the street first, then the
+    -- repair spot down inside. The server opens step two when you are there.
+    if data.entry and not data.entered then
+        local entry = vec3(data.entry.x, data.entry.y, data.entry.z)
+        setJobBlip(entry, 'Manhole: ' .. (data.label or 'Manhole Check'), true)
 
-    -- Stop any existing particles
-    StopAllParticles()
+        local point = lib.points.new({ coords = entry, distance = 8 })
+        function point:onEnter()
+            if entryPoint ~= self or CurrentTask ~= data then return end
+            local ok = lib.callback.await('dps-cityworker:server:ReachedEntry', false, data.id)
+            if not ok or entryPoint ~= self or CurrentTask ~= data then return end
+            self:remove()
+            entryPoint = nil
+            data.entered = true
+            openSite(data, true)
+            Bridge.Notify('This is the manhole. Go down and follow the guide to the repair spot.', 'inform')
+        end
+        entryPoint = point
 
-    -- Spawn task prop
-    if currentCone then DeleteEntity(currentCone) end
-    currentCone = SpawnTaskProp(data.taskType or 'pipe', data.location)
-
-    -- Start particle effects for applicable tasks
-    StartTaskParticles(data.taskType, data.location)
-
-    -- Create target zone for task
-    if currZone then RemoveTargetZone(currZone) end
-
-    local taskType = data.taskType or 'pipe'
-    local targetOptions = {}
-
-    -- Special handling for traffic control task
-    if taskType == 'traffic_control' then
-        targetOptions = {
-            {
-                icon = 'fas fa-road',
-                label = 'Setup Traffic Control',
-                action = function()
-                    OpenTrafficControlMenu()
-                end,
-                canInteract = function()
-                    return activeJob and isHired
-                end,
-            }
-        }
-    else
-        -- Standard repair task
-        targetOptions = {
-            {
-                icon = 'fas fa-wrench',
-                label = data.label or 'Repair',
-                action = function()
-                    DoRepairTask()
-                end,
-                canInteract = function()
-                    return activeJob and isHired
-                end,
-            }
-        }
+        Bridge.Notify(('New task: %s. Go to the manhole on the street first.'):format(data.label or 'Manhole Check'), 'inform')
+        return
     end
 
-    currZone = AddTargetZone('cityworker_task_' .. math.random(1000, 9999), {
-        coords = data.location,
-        radius = 2.0,
-    }, targetOptions)
-
-    local taskLabel = data.label or 'Repair Task'
-    Bridge.Notify('New task: ' .. taskLabel, 'inform')
+    openSite(data, data.entry ~= nil)
+    Bridge.Notify('New task: ' .. (data.label or 'Repair Task'), 'inform')
 end
 
 local function finishTask(result, doneText)
-    if currZone then
-        RemoveTargetZone(currZone)
-        currZone = nil
-    end
-    if currentCone then
-        DeleteEntity(currentCone)
-        currentCone = nil
-    end
-    if JobBlip then
-        RemoveBlip(JobBlip)
-        JobBlip = nil
-    end
-    StopAllParticles()
-    CurrentTask = nil
-    activeJob = false
+    cleanupJob()
 
     local text = (doneText .. ' +$%d | +%d XP'):format(result.payment, result.xp)
     if (result.travelPay or 0) > 0 then text = text .. (' (driving money $%d)'):format(result.travelPay) end
+    if (result.teamwork or 0) > 0 then text = text .. (' (teamwork +%d%%)'):format(result.teamwork) end
     Bridge.Notify(text, 'success')
     if result.sectorId then
         Bridge.Notify(('%s is now at %.0f%%'):format(result.sectorLabel or result.sectorId, result.sectorHealth), 'inform')
     end
 
     Wait(5000)
-    if isHired and result.nextTask then NextDelivery(result.nextTask) end
+    if isHired and not CurrentTask then NextDelivery(result.nextTask) end
 end
 
 function DoRepairTask()
     if not activeJob or not CurrentTask or Working then return end
     Working = true
-    local ok, err = pcall(DoRepairTaskInner)
+    local ok, err = pcall(DoRepairTaskInner, CurrentTask)
     Working = false
+    ClearPedTasks(cache.ped)
     if not ok then print('[dps-cityworker] repair failed: ' .. tostring(err)) end
 end
 
-function DoRepairTaskInner()
+local WorkLabels = {
+    pipe = 'Repairing pipe...',
+    pothole = 'Filling pothole...',
+    meter_reading = 'Reading meter...',
+    hydrant = 'Fixing hydrant...',
+    manhole = 'Checking manhole...',
+    storm_drain = 'Clearing drain...',
+    electrical = 'Repairing electrical box...',
+    transformer = 'Servicing transformer...',
+    bridge_inspection = 'Inspecting bridge...',
+    utility_locating = 'Locating utilities...',
+}
+
+--- `job` is the job as it was when the work started. If the worker is given
+--- another job half way through, this one is simply not paid.
+function DoRepairTaskInner(job)
     -- The server checks you are at the site with your truck, and starts the clock
-    local began, info = lib.callback.await('dps-cityworker:server:BeginTask', false, CurrentTask.id)
+    local began, info = lib.callback.await('dps-cityworker:server:BeginTask', false, job.id)
     if not began then
         Bridge.Notify(info or 'You cannot start this job yet', 'error')
         return
     end
 
-    local taskType = CurrentTask.taskType or 'pipe'
-    local category = CurrentTask.category or 'maintenance'
-    local difficulty = CurrentTask.difficulty or 'easy'
-
-    -- Get category-specific animation
-    local animData = GetTaskAnimation(category)
-    lib.requestAnimDict(animData.dict)
-    TaskPlayAnim(cache.ped, animData.dict, animData.anim, 8.0, -8.0, -1, 1, 0, false, false, false)
+    local taskType = job.taskType or 'pipe'
+    local animData = GetTaskAnimation(job.category or 'maintenance')
+    pcall(lib.requestAnimDict, animData.dict, 5000)
 
     -- How long the work takes comes from the server (it will not pay sooner)
-    local duration = (tonumber(info) and info * 1000) or TaskDurations[difficulty] or 8000
-
-    -- Task-specific labels
-    local taskLabels = {
-        pipe = 'Repairing pipe...',
-        pothole = 'Filling pothole...',
-        meter_reading = 'Reading meter...',
-        graffiti = 'Removing graffiti...',
-        trash = 'Collecting trash...',
-        streetlight = 'Fixing streetlight...',
-        hydrant = 'Inspecting hydrant...',
-        sign_repair = 'Repairing sign...',
-        manhole = 'Inspecting manhole...',
-        storm_drain = 'Clearing drain...',
-        electrical = 'Repairing electrical box...',
-        traffic_control = 'Setting up traffic control...',
-        tree_trimming = 'Trimming tree...',
-        cable_install = 'Installing cable...',
-        transformer = 'Servicing transformer...',
-        hazmat = 'Cleaning hazmat...',
-        bridge_inspection = 'Inspecting bridge...',
-        utility_locating = 'Locating utilities...',
-        water_main = 'Fixing water main!',
-        gas_leak = 'Sealing gas leak!',
-        downed_lines = 'Securing power lines!',
-        fallen_tree = 'Removing fallen tree!',
-    }
-
-    local progressLabel = taskLabels[taskType] or CurrentTask.label or 'Working...'
+    local duration = (tonumber(info) or job.seconds or 8) * 1000
 
     local success = lib.progressBar({
         duration = duration,
-        label = progressLabel,
+        label = WorkLabels[taskType] or job.label or 'Working...',
         useWhileDead = false,
         canCancel = true,
         disable = { move = true, car = true, combat = true },
         anim = { dict = animData.dict, clip = animData.anim },
     })
 
-    ClearPedTasks(cache.ped)
-
     if not success then
         Bridge.Notify('Task cancelled', 'error')
         return
     end
 
-    -- Skill check
-    local passed = DoTaskSkillCheck(taskType)
-
-    if not passed then
+    -- The skill check comes from the server with the job
+    if not lib.skillCheck(job.checks or Config.SkillCheck.Difficulty, Config.SkillCheck.Input) then
         Bridge.Notify('Task failed - try again!', 'error')
         return
     end
 
-    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false, CurrentTask.id)
+    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false, job.id)
 
     if paymentSuccess and result then
         finishTask(result, 'Job done!')
@@ -494,51 +483,61 @@ end
 -- WORK START/FINISH
 -- =====================================
 
-local function startWork(netid, data)
-    local workVehicle = lib.waitFor(function()
-        if NetworkDoesEntityExistWithNetworkId(netid) then
-            return NetToVeh(netid)
-        end
-    end, 'Could not load entity in time.', 3000)
-
-    if not workVehicle then
-        Bridge.Notify('Failed to spawn work vehicle', 'error')
-        return
+--- Keys come from the key script on this game. The server says when.
+RegisterNetEvent('dps-cityworker:client:keys', function(plate, give)
+    if type(plate) ~= 'string' then return end
+    if GetResourceState('wasabi_carlock') == 'started' then
+        pcall(function()
+            if give then exports.wasabi_carlock:GiveKey(plate) else exports.wasabi_carlock:RemoveKey(plate) end
+        end)
+    elseif give then
+        TriggerEvent('vehiclekeys:client:SetOwner', plate)
     end
+end)
 
-    -- The plate and the keys are set by the server
-    SetVehicleColours(workVehicle, 111, 111)
-    SetVehicleDirtLevel(workVehicle, 1)
-    if GetResourceState('wasabi_carlock') ~= 'started' then handleVehicleKeys(workVehicle) end
-    SetVehicleEngineOn(workVehicle, true, true)
-    Bridge.SetVehicleFuel(workVehicle, 100.0)
+--- Engine and fuel for the truck, once this game can see it. The shift does
+--- not wait for this: a truck that is slow to show up no longer locks anyone out.
+local function readyTruck(netid)
+    CreateThread(function()
+        local waited = 0
+        while not NetworkDoesEntityExistWithNetworkId(netid) do
+            Wait(100)
+            waited = waited + 100
+            if waited >= 15000 then return end
+        end
+        local veh = NetToVeh(netid)
+        if not veh or veh == 0 then return end
+        SetVehicleEngineOn(veh, true, true, false)
+        pcall(Bridge.SetVehicleFuel, veh, 100.0)
+    end)
+end
 
-    if not data then return end   -- a replacement truck: the shift is already running
-
+local function beginShift(task, resumed)
     isHired = true
-    Bridge.Notify('You started your shift. /citywork opens your job menu.', 'success')
-    NextDelivery(data)
+    Bridge.Notify(resumed and 'You are still on shift. Here is your job.' or 'You started your shift. /citywork opens your job menu.', 'success')
+    NextDelivery(task)
     ShowActiveEmergencies()
 end
 
-local function finishWork()
-    local ped = cache.ped
-    local pos = GetEntityCoords(ped)
-    local finishspot = vec3(Config.BossCoords.x, Config.BossCoords.y, Config.BossCoords.z)
+local function depotSpot()
+    return Depot and vec3(Depot.x, Depot.y, Depot.z) or nil
+end
 
-    if #(pos - finishspot) > 15.0 then
+local function finishWork()
+    local spot = depotSpot()
+    if not spot or #(GetEntityCoords(cache.ped) - spot) > 15.0 then
         Bridge.Notify('Return to HQ to clock out', 'error')
         return
     end
 
     if not isHired then return end
 
+    clockingOut = true
     local success = lib.callback.await('dps-cityworker:server:clockOut', false)
+    clockingOut = false
     if success then
+        leaveShift()
         Bridge.Notify('You ended your shift', 'success')
-        cleanupJob()
-        isHired = false
-        activeJob = false
     end
 end
 
@@ -546,19 +545,23 @@ end
 -- BOSS PED
 -- =====================================
 
+local BOSS_OPTIONS = {'Start Work', 'Replace Work Truck', 'Job Menu', 'Finish Work', 'Sub-Contractor Office'}
+
 local function yeetPed()
-    if DoesEntityExist(cityBoss) then
-        RemoveTargetEntity(cityBoss, {'Start Work', 'Replace Work Truck', 'Job Menu', 'Finish Work'})
+    if cityBoss and DoesEntityExist(cityBoss) then
+        RemoveTargetEntity(cityBoss, BOSS_OPTIONS)
         DeleteEntity(cityBoss)
-        cityBoss = nil
     end
+    cityBoss = nil
 end
 
 local function spawnPed()
-    if DoesEntityExist(cityBoss) then return end
+    if not Depot or (cityBoss and DoesEntityExist(cityBoss)) then return end
 
-    lib.requestModel(Config.BossModel)
-    cityBoss = CreatePed(0, Config.BossModel, Config.BossCoords.x, Config.BossCoords.y, Config.BossCoords.z, Config.BossCoords.w, false, false)
+    local model = Config.BossModel
+    if not pcall(lib.requestModel, model, 10000) then return end
+    cityBoss = CreatePed(0, model, Depot.x, Depot.y, Depot.z, Depot.w, false, false)
+    SetModelAsNoLongerNeeded(model)
     SetEntityAsMissionEntity(cityBoss, true, true)
     SetPedFleeAttributes(cityBoss, 0, 0)
     SetBlockingOfNonTemporaryEvents(cityBoss, true)
@@ -566,17 +569,18 @@ local function spawnPed()
     FreezeEntityPosition(cityBoss, true)
     TaskStartScenarioInPlace(cityBoss, 'WORLD_HUMAN_CLIPBOARD', 0, true)
 
-    AddTargetEntity(cityBoss, {
+    local options = {
         {
             icon = 'fas fa-hard-hat',
             label = 'Start Work',
             action = function()
-                local netid, data = lib.callback.await('dps-cityworker:server:spawnVehicle', false)
-                if netid then
-                    startWork(netid, data)
-                else
-                    Bridge.Notify(data or 'Could not start work', 'error')
+                local res = lib.callback.await('dps-cityworker:server:spawnVehicle', false)
+                if not res or not res.ok then
+                    Bridge.Notify(res and res.msg or 'Could not start work', 'error')
+                    return
                 end
+                if res.netid then readyTruck(res.netid) end
+                beginShift(res.task, res.resume)
             end,
             canInteract = function()
                 return not isHired
@@ -588,7 +592,7 @@ local function spawnPed()
             action = function()
                 local netid, why = lib.callback.await('dps-cityworker:server:newTruck', false)
                 if netid then
-                    startWork(netid, nil)
+                    readyTruck(netid)
                     Bridge.Notify('Here is another truck. Look after this one.', 'success')
                 else
                     Bridge.Notify(why or 'No truck available', 'error')
@@ -618,74 +622,112 @@ local function spawnPed()
                 return isHired
             end,
         },
+    }
+
+    -- The company office is the same man. (It used to be a second ped standing inside him.)
+    local C = Config.Contractor or {}
+    if C.enable and C.bossPed then
+        options[#options + 1] = {
+            icon = 'fas fa-building',
+            label = 'Sub-Contractor Office',
+            action = function()
+                if OpenCompanyMenu then OpenCompanyMenu() end
+            end,
+        }
+    end
+
+    AddTargetEntity(cityBoss, options)
+end
+
+-- =====================================
+-- DEPOT (blip, boss, where to clock in)
+-- =====================================
+
+--- The depot is wherever the server says it is. An admin can move it in game
+--- with /cityspot depot and every player's map follows at once.
+local function setDepot(d)
+    if type(d) ~= 'table' or not d.x then return end
+
+    yeetPed()
+    if startZone then startZone:remove() startZone = nil end
+    if CITY_BLIP then RemoveBlip(CITY_BLIP) end
+
+    Depot = vec4(d.x + 0.0, d.y + 0.0, d.z + 0.0, (d.w or 0) + 0.0)
+
+    CITY_BLIP = AddBlipForCoord(Depot.x, Depot.y, Depot.z)
+    SetBlipSprite(CITY_BLIP, 566)
+    SetBlipDisplay(CITY_BLIP, 4)
+    SetBlipScale(CITY_BLIP, 0.8)
+    SetBlipAsShortRange(CITY_BLIP, true)
+    SetBlipColour(CITY_BLIP, 5)
+    BeginTextCommandSetBlipName("STRING")
+    AddTextComponentSubstringPlayerName("City Worker Job")
+    EndTextCommandSetBlipName(CITY_BLIP)
+
+    startZone = lib.points.new({
+        coords = vec3(Depot.x, Depot.y, Depot.z),
+        distance = 50,
+        onEnter = spawnPed,
+        onExit = yeetPed,
     })
 end
 
--- =====================================
--- SPAWN ZONE
--- =====================================
+AddStateBagChangeHandler('dpsCityDepot', 'global', function(_, _, value)
+    setDepot(value)
+end)
 
-startZone = lib.points.new({
-    coords = vec3(Config.BossCoords.x, Config.BossCoords.y, Config.BossCoords.z),
-    distance = 50,
-})
-
-function startZone:onEnter()
-    spawnPed()
-end
-
-function startZone:onExit()
-    yeetPed()
-end
+CreateThread(function()
+    local waited = 0
+    while not GlobalState.dpsCityDepot and waited < 30000 do
+        Wait(500)
+        waited = waited + 500
+    end
+    if not Depot then setDepot(GlobalState.dpsCityDepot) end
+end)
 
 -- =====================================
 -- CONTROL ROOM NUI
 -- =====================================
 
-RegisterNetEvent('dps-cityworker:client:OpenControlRoom', function()
-    local canOpen, sectorData = lib.callback.await('dps-cityworker:server:OpenControlRoom', false)
+local function closeControlRoom()
+    ControlRoomOpen = false
+    SetNuiFocus(false, false)
+    SendNUIMessage({ action = 'close' })
+end
 
+RegisterNetEvent('dps-cityworker:client:OpenControlRoom', function()
+    local canOpen, data = lib.callback.await('dps-cityworker:server:OpenControlRoom', false)
     if not canOpen then return end
 
     ControlRoomOpen = true
     SetNuiFocus(true, true)
-    SendNUIMessage({
-        action = 'open',
-        sectors = sectorData
-    })
-end)
-
-RegisterNetEvent('dps-cityworker:client:UpdateSectorHealth', function(sectorHealth)
-    if ControlRoomOpen then
-        local data = {}
-        for id, health in pairs(sectorHealth) do
-            data[id] = {
-                health = health,
-                label = Config.Sectors[id] and Config.Sectors[id].label or id,
-            }
-        end
-        SendNUIMessage({
-            action = 'update',
-            sectors = data
-        })
-    end
+    SendNUIMessage({ action = 'open', data = data })
 end)
 
 RegisterNUICallback('closeUI', function(_, cb)
-    ControlRoomOpen = false
-    SetNuiFocus(false, false)
-    SendNUIMessage({ action = 'close' })
+    closeControlRoom()
     cb('ok')
 end)
 
-RegisterNUICallback('dispatchCrew', function(data, cb)
-    local success, msg = lib.callback.await('dps-cityworker:server:DispatchCrew', false, data.sector)
-    if success then
-        Bridge.Notify('Crew dispatched to ' .. data.sector, 'success')
-    else
-        Bridge.Notify(msg or 'Failed to dispatch', 'error')
+-- The screen asks for fresh numbers every few seconds while it is open
+RegisterNUICallback('refresh', function(_, cb)
+    if not ControlRoomOpen then return cb({}) end
+    local canOpen, data = lib.callback.await('dps-cityworker:server:OpenControlRoom', false)
+    if not canOpen then
+        closeControlRoom()
+        return cb({})
     end
-    cb('ok')
+    cb(data or {})
+end)
+
+RegisterNUICallback('dispatchWorker', function(data, cb)
+    local ok, msg = lib.callback.await('dps-cityworker:server:DispatchWorker', false, data.worker, data.sector)
+    cb({ ok = ok and true or false, msg = msg or (ok and 'Sent' or 'Could not send that worker') })
+end)
+
+RegisterNUICallback('closeReport', function(data, cb)
+    local ok = lib.callback.await('dps-cityworker:server:CloseReport', false, data.id)
+    cb({ ok = ok and true or false })
 end)
 
 -- =====================================
@@ -870,24 +912,12 @@ function ShowActiveEmergencies()
 end
 
 function CreateEmergencyZone(data)
-    -- Snap coords to actual ground level as a safety net
-    local groundZ = data.coords.z
-    local found, z = GetGroundZFor_3dCoord(data.coords.x, data.coords.y, data.coords.z + 50.0, false)
-    if found then
-        groundZ = z
-    end
-    local groundCoords = vec3(data.coords.x, data.coords.y, groundZ)
+    local groundCoords = vec3(data.coords.x, data.coords.y, data.coords.z)
 
-    -- Spawn emergency prop at ground-corrected position
-    local propModel = GetTaskProp(data.type)
-    lib.requestModel(propModel)
-    local prop = CreateObject(propModel, groundCoords.x, groundCoords.y, groundCoords.z - 1.0, false, false, false)
-    PlaceObjectOnGroundProperly(prop)
-    FreezeEntityPosition(prop, true)
-    EmergencyProps[data.sector] = prop
-
-    -- Start emergency particle effects at ground level
-    StartTaskParticles(data.type, groundCoords)
+    -- Marker prop and effects. The zone below works even if these do not.
+    if EmergencyProps[data.sector] and DoesEntityExist(EmergencyProps[data.sector]) then DeleteEntity(EmergencyProps[data.sector]) end
+    EmergencyProps[data.sector] = SpawnTaskProp(data.type, groundCoords)
+    pcall(StartTaskParticles, data.type, groundCoords)
 
     -- Create target zone at ground-corrected position
     local zoneName = 'emergency_' .. data.sector
@@ -962,8 +992,7 @@ function RespondToEmergency(sectorId)
     end
 end
 
-RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
-    -- Remove emergency blip
+local function clearEmergency(sectorId)
     if ActiveEmergencyBlips[sectorId] then
         RemoveBlip(ActiveEmergencyBlips[sectorId])
         ActiveEmergencyBlips[sectorId] = nil
@@ -980,17 +1009,27 @@ RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
         EmergencyZones[sectorId] = nil
     end
 
-    -- Stop particle effects
-    if StopAllParticles then StopAllParticles() end
-
-    -- Clean up prop
     if EmergencyProps[sectorId] then
-        DeleteEntity(EmergencyProps[sectorId])
+        if DoesEntityExist(EmergencyProps[sectorId]) then DeleteEntity(EmergencyProps[sectorId]) end
         EmergencyProps[sectorId] = nil
+        StopAllParticles()
     end
+end
+
+--- Every emergency marker on this game goes (end of shift).
+function ClearEmergencies()
+    local ids = {}
+    for sectorId in pairs(ActiveEmergencyBlips) do ids[#ids + 1] = sectorId end
+    for sectorId in pairs(EmergencyProximityPoints) do ids[#ids + 1] = sectorId end
+    for _, sectorId in ipairs(ids) do clearEmergency(sectorId) end
+end
+
+RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
+    local had = ActiveEmergencyBlips[sectorId] ~= nil
+    clearEmergency(sectorId)
 
     local sector = Config.Sectors[sectorId]
-    if sector then
+    if sector and had and isHired then
         lib.notify({
             title = 'Emergency Resolved',
             description = ('%s emergency has been handled'):format(sector.label),
@@ -1001,212 +1040,11 @@ RegisterNetEvent('dps-cityworker:client:EmergencyResolved', function(sectorId)
 end)
 
 -- =====================================
--- TRAFFIC CONTROL SYSTEM
--- =====================================
-
-local PlacedTrafficProps = {}
-local MAX_TRAFFIC_PROPS = 8
-
-local function PlaceTrafficProp(propType)
-    if #PlacedTrafficProps >= MAX_TRAFFIC_PROPS then
-        Bridge.Notify('Maximum props placed (8)', 'error')
-        return
-    end
-
-    local propModel = Config.TrafficProps[propType]
-    if not propModel then return end
-
-    lib.requestModel(propModel)
-
-    local playerPos = GetEntityCoords(cache.ped)
-    local playerHeading = GetEntityHeading(cache.ped)
-    local forward = GetEntityForwardVector(cache.ped)
-
-    -- Place prop 1.5m in front of player
-    local placePos = playerPos + forward * 1.5
-
-    -- Animation for placing
-    lib.requestAnimDict('anim@heists@narcotics@trash')
-    TaskPlayAnim(cache.ped, 'anim@heists@narcotics@trash', 'drop_front', 8.0, -8.0, 1000, 0, 0, false, false, false)
-
-    Wait(500)
-
-    local prop = CreateObject(propModel, placePos.x, placePos.y, placePos.z - 1.0, false, false, false)
-    PlaceObjectOnGroundProperly(prop)
-    FreezeEntityPosition(prop, true)
-    SetEntityHeading(prop, playerHeading)
-
-    table.insert(PlacedTrafficProps, prop)
-
-    ClearPedTasks(cache.ped)
-    Bridge.Notify(('Placed %s (%d/%d)'):format(propType, #PlacedTrafficProps, MAX_TRAFFIC_PROPS), 'success')
-end
-
-local function PickupTrafficProp()
-    local playerPos = GetEntityCoords(cache.ped)
-    local closestProp = nil
-    local closestDist = 3.0
-
-    for i, prop in ipairs(PlacedTrafficProps) do
-        if DoesEntityExist(prop) then
-            local propPos = GetEntityCoords(prop)
-            local dist = #(playerPos - propPos)
-            if dist < closestDist then
-                closestDist = dist
-                closestProp = i
-            end
-        end
-    end
-
-    if closestProp then
-        lib.requestAnimDict('anim@heists@narcotics@trash')
-        TaskPlayAnim(cache.ped, 'anim@heists@narcotics@trash', 'pickup', 8.0, -8.0, 1000, 0, 0, false, false, false)
-
-        Wait(500)
-
-        DeleteEntity(PlacedTrafficProps[closestProp])
-        table.remove(PlacedTrafficProps, closestProp)
-
-        ClearPedTasks(cache.ped)
-        Bridge.Notify(('Picked up prop (%d remaining)'):format(#PlacedTrafficProps), 'inform')
-    else
-        Bridge.Notify('No props nearby', 'error')
-    end
-end
-
-local function ClearAllTrafficProps()
-    for _, prop in ipairs(PlacedTrafficProps) do
-        if DoesEntityExist(prop) then
-            DeleteEntity(prop)
-        end
-    end
-    PlacedTrafficProps = {}
-end
-
--- Traffic control radial menu (when doing traffic_control task)
-local TrafficControlActive = false
-
-function OpenTrafficControlMenu()  -- forward-declared below the file header
-    if TrafficControlActive or not CurrentTask then return end
-
-    -- Tell the server the work has started (once per job)
-    if TrafficBegun ~= CurrentTask.id then
-        local began, why = lib.callback.await('dps-cityworker:server:BeginTask', false, CurrentTask.id)
-        if not began then
-            Bridge.Notify(why or 'You cannot start this job yet', 'error')
-            return
-        end
-        TrafficBegun = CurrentTask.id
-    end
-    TrafficControlActive = true
-
-    lib.registerContext({
-        id = 'traffic_control_menu',
-        title = 'Traffic Control Equipment',
-        options = {
-            {
-                title = 'Place Cone',
-                description = 'Place a traffic cone',
-                icon = 'fa-solid fa-cone-striped',
-                onSelect = function()
-                    PlaceTrafficProp('Cone')
-                end,
-            },
-            {
-                title = 'Place Barrier',
-                description = 'Place a road barrier',
-                icon = 'fa-solid fa-road-barrier',
-                onSelect = function()
-                    PlaceTrafficProp('Barrier')
-                end,
-            },
-            {
-                title = 'Place Stop Sign',
-                description = 'Place a stop sign',
-                icon = 'fa-solid fa-octagon',
-                onSelect = function()
-                    PlaceTrafficProp('Sign_Stop')
-                end,
-            },
-            {
-                title = 'Place Slow Sign',
-                description = 'Place a slow sign',
-                icon = 'fa-solid fa-diamond',
-                onSelect = function()
-                    PlaceTrafficProp('Sign_Slow')
-                end,
-            },
-            {
-                title = 'Place Work Light',
-                description = 'Place a work light',
-                icon = 'fa-solid fa-lightbulb',
-                onSelect = function()
-                    PlaceTrafficProp('Light')
-                end,
-            },
-            {
-                title = 'Pickup Nearest',
-                description = 'Pick up nearest prop',
-                icon = 'fa-solid fa-hand',
-                onSelect = function()
-                    PickupTrafficProp()
-                end,
-            },
-            {
-                title = 'Complete Setup',
-                description = ('Finish traffic control (%d props placed)'):format(#PlacedTrafficProps),
-                icon = 'fa-solid fa-check',
-                disabled = #PlacedTrafficProps < 4,
-                onSelect = function()
-                    CompleteTrafficControl()
-                end,
-            },
-        }
-    })
-
-    lib.showContext('traffic_control_menu')
-    TrafficControlActive = false
-end
-
-function CompleteTrafficControl()
-    if #PlacedTrafficProps < 4 then
-        Bridge.Notify('Place at least 4 props to complete', 'error')
-        return
-    end
-
-    if not CurrentTask then return end
-    local paymentSuccess, result = lib.callback.await('dps-cityworker:server:Payment', false, CurrentTask.id)
-
-    if paymentSuccess and result then
-        -- The cones stay out for a minute, then the crew "collects" them
-        SetTimeout(60000, function()
-            ClearAllTrafficProps()
-        end)
-        TrafficBegun = nil
-        finishTask(result, 'Traffic control set up!')
-    else
-        Bridge.Notify('The city could not sign this job off. Stay at the site and try again in a few seconds.', 'error')
-    end
-end
-
--- Cleanup traffic props on job reset
-local OriginalCleanupJob = cleanupJob
-
-cleanupJob = function()
-    ClearAllTrafficProps()
-    OriginalCleanupJob()
-end
-
--- =====================================
 -- WEATHER-TRIGGERED EVENTS
 -- =====================================
 
--- Weather task bonus notification
-local WeatherBonusActive = {}
-
 RegisterNetEvent('dps-cityworker:client:WeatherTaskBonus', function(data)
-    WeatherBonusActive[data.type] = true
-
+    if not isHired then return end
     lib.notify({
         title = 'Weather Bonus Active',
         description = data.message,
@@ -1214,11 +1052,6 @@ RegisterNetEvent('dps-cityworker:client:WeatherTaskBonus', function(data)
         duration = 15000,
         icon = 'fa-solid fa-cloud-rain',
     })
-
-    -- Bonus expires after 10 minutes
-    SetTimeout(600000, function()
-        WeatherBonusActive[data.type] = nil
-    end)
 end)
 
 -- =====================================
@@ -1240,10 +1073,7 @@ RegisterNetEvent('dps-cityworker:client:TaskAssigned', function(data)
         icon = 'fa-solid fa-clipboard-list',
     })
 
-    -- Clean up current task
-    cleanupJob()
-
-    -- Start new assigned task
+    -- The new job replaces the current one
     NextDelivery(data)
 end)
 
@@ -1319,12 +1149,18 @@ function OpenWorkMenu()
         },
         {
             title = CurrentTask and ('Current job: ' .. (CurrentTask.label or 'Repair')) or 'No job right now',
-            description = CurrentTask and 'Set the GPS to the work site' or 'A new job is on its way',
+            description = CurrentTask and 'Set the GPS to the work site' or 'Ask the city for a job',
             icon = 'fa-solid fa-location-dot',
-            disabled = not CurrentTask,
             onSelect = function()
-                SetNewWaypoint(CurrentTask.location.x, CurrentTask.location.y)
-                Bridge.Notify('GPS set to the work site', 'inform')
+                if CurrentTask then
+                    local to = (CurrentTask.entry and not CurrentTask.entered) and CurrentTask.entry or CurrentTask.location
+                    SetNewWaypoint(to.x, to.y)
+                    Bridge.Notify('GPS set', 'inform')
+                    return
+                end
+                local ok, task = lib.callback.await('dps-cityworker:server:RequestTask', false)
+                if not ok then return Bridge.Notify(task or 'No job right now', 'error') end
+                NextDelivery(task)
             end,
         },
         {
@@ -1335,7 +1171,6 @@ function OpenWorkMenu()
             onSelect = function()
                 local ok, task = lib.callback.await('dps-cityworker:server:SkipTask', false)
                 if not ok then return Bridge.Notify(task or 'You cannot swap right now', 'error') end
-                cleanupJob()
                 NextDelivery(task)
             end,
         },
@@ -1365,7 +1200,7 @@ function OpenWorkMenu()
     }
     if (stats.rank or 1) >= 5 then
         options[#options + 1] = {
-            title = 'Control Room', description = 'Grid dashboard and crew dispatch', icon = 'fa-solid fa-tower-broadcast',
+            title = 'Control Room', description = 'Grid, workers on shift, damage reports, dispatch', icon = 'fa-solid fa-tower-broadcast',
             onSelect = function() TriggerEvent('dps-cityworker:client:OpenControlRoom') end,
         }
         options[#options + 1] = {
@@ -1379,89 +1214,27 @@ end
 
 RegisterCommand('citywork', function() OpenWorkMenu() end, false)
 
--- Still on shift after this script restarted on the player's side: pick the job back up
+-- =====================================
+-- SHIFT STATE (decided by the server)
+-- =====================================
+
+-- This script just started on this game: ask the server if a shift is running.
 CreateThread(function()
     Wait(4000)
     if isHired then return end
-    local task = lib.callback.await('dps-cityworker:server:CurrentTask', false)
-    if task then
+    local onShift, task = lib.callback.await('dps-cityworker:server:ShiftState', false)
+    if onShift and not isHired then
         isHired = true
         NextDelivery(task)
         ShowActiveEmergencies()
     end
 end)
 
--- Teamwork bonus indicator
-local teamworkRunning = false  -- CreateThread returns nothing, so track with a flag
-
-local function StartTeamworkCheck()
-    if teamworkRunning then return end
-    teamworkRunning = true
-
-    CreateThread(function()
-        local lastBonus = 0
-
-        while isHired do
-            Wait(10000) -- Check every 10 seconds
-
-            local nearby = lib.callback.await('dps-cityworker:server:GetNearbyWorkers', false, 30.0)
-            local bonusPercent = math.min(#nearby * 10, 30)
-
-            if bonusPercent > 0 and bonusPercent ~= lastBonus then
-                lib.notify({
-                    title = 'Teamwork Bonus',
-                    description = ('%d%% bonus active! (%d workers nearby)'):format(bonusPercent, #nearby),
-                    type = 'success',
-                    duration = 5000,
-                    icon = 'fa-solid fa-users',
-                })
-                lastBonus = bonusPercent
-            elseif bonusPercent == 0 and lastBonus > 0 then
-                lastBonus = 0
-            end
-        end
-
-        teamworkRunning = false
-    end)
-end
-
--- Auto-start teamwork check when player becomes hired
-CreateThread(function()
-    while true do
-        Wait(5000)
-        if isHired and not teamworkRunning then
-            StartTeamworkCheck()
-        end
-    end
-end)
-
--- =====================================
--- DISPATCH ALERTS
--- =====================================
-
-RegisterNetEvent('dps-cityworker:client:DispatchAlert', function(data)
-    if not isHired then return end
-
-    lib.notify({
-        title = 'Dispatch Alert',
-        description = ('Crew needed at %s'):format(data.label),
-        type = 'warning',
-        duration = 10000,
-    })
-
-    -- Set GPS to dispatch location
-    local alert = lib.alertDialog({
-        header = 'Dispatch Alert',
-        content = ('Crew requested at **%s**.\n\nSet GPS to location?'):format(data.label),
-        centered = true,
-        cancel = true,
-        labels = { confirm = 'Set GPS', cancel = 'Ignore' }
-    })
-
-    if alert == 'confirm' then
-        SetNewWaypoint(data.coords.x, data.coords.y)
-        Bridge.Notify('GPS set to dispatch location', 'inform')
-    end
+-- The server ended the shift (character switch, script restart, anything):
+-- this game follows.
+AddStateBagChangeHandler('dpsCityShift', nil, function(bagName, _, value)
+    if bagName ~= ('player:%s'):format(cache.serverId) then return end
+    if not value and isHired and not clockingOut then leaveShift() end
 end)
 
 -- =====================================
@@ -1473,7 +1246,7 @@ function OnPlayerLoaded()
 end
 
 function OnPlayerUnload()
-    resetJob()
+    leaveShift()
 end
 
 -- =====================================
@@ -1482,11 +1255,10 @@ end
 
 AddEventHandler('onResourceStop', function(resource)
     if resource == GetCurrentResourceName() then
-        resetJob()
+        leaveShift()
+        yeetPed()
         SetArtificialLightsState(false)
-        if ControlRoomOpen then
-            SetNuiFocus(false, false)
-        end
+        if ControlRoomOpen then closeControlRoom() end
     end
 end)
 

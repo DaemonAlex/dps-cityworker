@@ -1,6 +1,6 @@
 --[[
     dps-cityworker — Sub-Contractor Company (client)
-    Office ped + /company menu: register, browse/accept contracts, hire crew,
+    Depot boss option + /company menu: register, browse/accept contracts, hire crew,
     withdraw funds. All UI through ox_lib so it inherits the house style.
 ]]
 
@@ -135,30 +135,5 @@ end
 
 RegisterCommand('company', function() openCompanyMenu() end, false)
 
--- Office ped players interact with to manage their company
-CreateThread(function()
-    if not C.enable or not C.bossPed or not Config.BossCoords then return end
-
-    local model = Config.BossModel or `s_m_y_construct_02`
-    RequestModel(model)
-    local t = 0
-    while not HasModelLoaded(model) and t < 100 do Wait(10); t = t + 1 end
-    if not HasModelLoaded(model) then return end
-
-    local c = Config.BossCoords
-    local ped = CreatePed(4, model, c.x, c.y, c.z - 1.0, c.w, false, true)
-    FreezeEntityPosition(ped, true)
-    SetEntityInvincible(ped, true)
-    SetBlockingOfNonTemporaryEvents(ped, true)
-    SetModelAsNoLongerNeeded(model)
-
-    exports.ox_target:addLocalEntity(ped, {
-        {
-            name = 'dps_contractor_office',
-            icon = 'fas fa-building',
-            label = 'Sub-Contractor Office',
-            distance = 2.5,
-            onSelect = function() openCompanyMenu() end,
-        },
-    })
-end)
+-- The office is an option on the depot boss (cl_cityworker.lua), not a ped of its own.
+function OpenCompanyMenu() openCompanyMenu() end
